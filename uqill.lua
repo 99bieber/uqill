@@ -1,25 +1,44 @@
 --[[ 
     FILE: fishing.lua
-    FINAL VERSION: TURBO LOOP + ADJUSTABLE RESET DELAY
+    FINAL VERSION: SAFE CLEANUP (Protects Executor GUI)
 ]]
 
 -- =====================================================
--- 🧹 BAGIAN 1: CLEANUP
+-- 🧹 BAGIAN 1: SMART CLEANUP (HANYA HAPUS GUI KITA)
 -- =====================================================
+-- Nama unik untuk GUI kita agar mudah dicari dan dihapus
+local MyGuiName = "UQiLL_Fishing_UI"
+local MobileGuiName = "UQiLL_Mobile_Button"
+
 if getgenv().fishingStart then
     getgenv().fishingStart = false
     task.wait(0.5)
 end
 
 local CoreGui = game:GetService("CoreGui")
-for _, v in pairs(CoreGui:GetDescendants()) do
-    if v:IsA("TextLabel") and v.Text == "UQiLL" then
-        local container = v
-        for i = 1, 10 do
-            if container.Parent then
-                container = container.Parent
-                if container:IsA("ScreenGui") then container:Destroy() break end
-            end
+
+-- Hapus Window Utama Lama
+for _, v in pairs(CoreGui:GetChildren()) do
+    if v.Name == MyGuiName then
+        v:Destroy()
+    end
+end
+
+-- Hapus Tombol Mobile Lama
+for _, v in pairs(CoreGui:GetChildren()) do
+    if v.Name == MobileGuiName then
+        v:Destroy()
+    end
+end
+
+-- (Opsional) Hapus sisa-sisa WindUI yang mungkin pakai nama random
+-- Kita filter agar tidak menghapus GUI Executor (Delta biasanya bernama "Delta" atau "RobloxGui")
+for _, v in pairs(CoreGui:GetChildren()) do
+    if v:IsA("ScreenGui") then
+        -- Cek apakah di dalamnya ada TextLabel "UQiLL"
+        local label = v:FindFirstChild("Title", true) -- WindUI biasanya punya Title
+        if label and label:IsA("TextLabel") and label.Text == "UQiLL" then
+            v:Destroy()
         end
     end
 end
