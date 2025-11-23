@@ -1,44 +1,33 @@
 --[[ 
     FILE: fishing.lua
-    FINAL VERSION: SAFE CLEANUP (Protects Executor GUI)
+    VERSION: 2.2 (Turbo Loop + Fixed Walk on Water + Final UI)
 ]]
 
 -- =====================================================
--- 🧹 BAGIAN 1: SMART CLEANUP (HANYA HAPUS GUI KITA)
+-- 🧹 BAGIAN 1: CLEANUP SYSTEM
 -- =====================================================
--- Nama unik untuk GUI kita agar mudah dicari dan dihapus
-local MyGuiName = "UQiLL_Fishing_UI"
-local MobileGuiName = "UQiLL_Mobile_Button"
-
 if getgenv().fishingStart then
     getgenv().fishingStart = false
     task.wait(0.5)
 end
 
 local CoreGui = game:GetService("CoreGui")
+local GUI_NAMES = {"UQiLL_Fishing_UI", "UQiLL_Mobile_Button", "UQiLL_PosHUD"}
 
--- Hapus Window Utama Lama
 for _, v in pairs(CoreGui:GetChildren()) do
-    if v.Name == MyGuiName then
-        v:Destroy()
+    for _, name in pairs(GUI_NAMES) do
+        if v.Name == name then v:Destroy() end
     end
 end
 
--- Hapus Tombol Mobile Lama
-for _, v in pairs(CoreGui:GetChildren()) do
-    if v.Name == MobileGuiName then
-        v:Destroy()
-    end
-end
-
--- (Opsional) Hapus sisa-sisa WindUI yang mungkin pakai nama random
--- Kita filter agar tidak menghapus GUI Executor (Delta biasanya bernama "Delta" atau "RobloxGui")
-for _, v in pairs(CoreGui:GetChildren()) do
-    if v:IsA("ScreenGui") then
-        -- Cek apakah di dalamnya ada TextLabel "UQiLL"
-        local label = v:FindFirstChild("Title", true) -- WindUI biasanya punya Title
-        if label and label:IsA("TextLabel") and label.Text == "UQiLL" then
-            v:Destroy()
+for _, v in pairs(CoreGui:GetDescendants()) do
+    if v:IsA("TextLabel") and v.Text == "UQiLL" then
+        local container = v
+        for i = 1, 10 do
+            if container.Parent then
+                container = container.Parent
+                if container:IsA("ScreenGui") then container:Destroy() break end
+            end
         end
     end
 end
@@ -52,9 +41,9 @@ local instant = false
 local superInstant = true 
 
 local args = { -1.115296483039856, 0.5, 1763651451.636425 }
-local delayTime = 0.56   -- Instant (Delay Catch)
-local delayCharge = 1.15 -- Blatan (Delay Fishing/Wait Fish)
-local delayReset = 0.2   -- Blatan (Delay Reset/Micro Reset) <--- VARIABEL BARU
+local delayTime = 0.56   
+local delayCharge = 1.15 
+local delayReset = 0.2 
 
 local rs = game:GetService("ReplicatedStorage")
 local net = rs.Packages["_Index"]["sleitnick_net@0.2.0"].net
@@ -63,6 +52,7 @@ local RequestGame  = net["RF/RequestFishingMinigameStarted"]
 local CompleteGame = net["RE/FishingCompleted"]
 local CancelInput  = net["RF/CancelFishingInputs"]
 local SellAll      = net["RF/SellAllItems"] 
+local PurchaseWeather = net["RF/PurchaseWeatherEvent"]
 
 local SettingsState = { 
     FPSBoost = { Active = false, BackupLighting = {} }, 
@@ -73,48 +63,109 @@ local SettingsState = {
         TimeActive = false,
         TimeInterval = 60,
         IsSelling = false
-    }
+    },
+    AutoWeather = {
+        Active = false,
+        Targets = {} 
+    },
+    PosWatcher = { Active = false, Connection = nil },
+    WaterWalk = { Active = false, Part = nil, Connection = nil } -- State Baru
 }
 
+local Workspace = game:GetService("Workspace")
+local Players = game:GetService("Players")
+local LocalPlayer = Players.LocalPlayer
+local PlayerGui = LocalPlayer:WaitForChild("PlayerGui")
+local RunService = game:GetService("RunService")
+
 -- =====================================================
--- 💰 BAGIAN 3: AUTO SELL (BACKGROUND PAUSER)
+-- 🌦️ BAGIAN 3: SMART WEATHER
+-- =====================================================
+local function GetActiveWeathers()
+    local activeList = {}
+    local PG = Players.LocalPlayer:FindFirstChild("PlayerGui")
+    if not PG then return activeList end
+
+    local weatherUI = PG:FindFirstChild("!!! Weather Machine")
+    if weatherUI then
+        local grid = weatherUI:FindFirstChild("Frame") 
+            and weatherUI.Frame:FindFirstChild("Frame") 
+            and weatherUI.Frame.Frame:FindFirstChild("Left") 
+            and weatherUI.Frame.Frame.Left:FindFirstChild("Frame")
+            and weatherUI.Frame.Frame.Left.Frame:FindFirstChild("Grid")
+        
+        if grid then
+            for _, child in pairs(grid:GetChildren()) do
+                if child.Name == "ActiveTile" then
+                    local content = child:FindFirstChild("Content")
+                    if content then
+                        for _, item in pairs(content:GetChildren()) do
+                            if item:IsA("ImageLabel") then
+                                table.insert(activeList, item.Name) 
+                            end
+                        end
+                    end
+                end
+            end
+        end
+    end
+    return activeList
+end
+
+local function StartSmartWeatherLoop()
+    task.spawn(function()
+        print("🌦️ Smart Weather: STARTED")
+        while SettingsState.AutoWeather.Active do
+            local currentActive = GetActiveWeathers()
+            for _, targetWeather in pairs(SettingsState.AutoWeather.SelectedList) do
+                local isAlreadyActive = false
+                for _, activeName in pairs(currentActive) do
+                    if string.find(string.lower(activeName), string.lower(targetWeather)) then
+                        isAlreadyActive = true
+                        break
+                    end
+                end
+                if not isAlreadyActive then
+                    pcall(function() PurchaseWeather:InvokeServer(targetWeather) end)
+                    task.wait(2) 
+                end
+            end
+            for i = 1, 15 do 
+                if not SettingsState.AutoWeather.Active then return end
+                task.wait(1)
+            end
+        end
+    end)
+end
+
+-- =====================================================
+-- 💰 BAGIAN 4: AUTO SELL
 -- =====================================================
 local function StartAutoSellLoop()
     task.spawn(function()
-        print("💰 Auto Sell Service: STARTED")
-        
+        print("💰 Auto Sell: STARTED")
         while SettingsState.AutoSell.TimeActive do
             for i = 1, SettingsState.AutoSell.TimeInterval do
                 if not SettingsState.AutoSell.TimeActive then return end
                 task.wait(1)
             end
-
             SettingsState.AutoSell.IsSelling = true 
             task.wait(0.5) 
-            
-            local success, err = pcall(function()
-                SellAll:InvokeServer()
-            end)
-            
-            if success then print("💰 Sold Items!") end
-            
+            pcall(function() SellAll:InvokeServer() end)
             pcall(function() CancelInput:InvokeServer() end)
             task.wait(0.5)
-            
             SettingsState.AutoSell.IsSelling = false
         end
     end)
 end
 
 -- =====================================================
--- 🎣 BAGIAN 4: LOGIKA FISHING (TURBO + SLIDER UPDATE)
+-- 🎣 BAGIAN 5: LOGIKA FISHING (TURBO)
 -- =====================================================
-
 local function startFishingLoop()
     print("🎣 Standard Loop Started")
     while getgenv().fishingStart do
         while SettingsState.AutoSell.IsSelling do task.wait(0.1) end
-
         task.spawn(function() ChargeRod:InvokeServer() end)
         task.spawn(function() RequestGame:InvokeServer(unpack(args)) end)
         task.wait(delayTime)
@@ -127,27 +178,15 @@ end
 local function startFishingSuperInstantLoop()
     print("⚡ TURBO Loop Started")
     while getgenv().fishingStart do
-        
-        while SettingsState.AutoSell.IsSelling do
-            task.wait(0.1) 
-        end
-
-        -- 1. Lanjut Mancing
+        while SettingsState.AutoSell.IsSelling do task.wait(0.1) end
         pcall(function() CancelInput:InvokeServer() end)
         task.wait(0.05)
-
         task.spawn(function() pcall(function() ChargeRod:InvokeServer() end) end)
         task.wait(0.03)
         task.spawn(function() pcall(function() RequestGame:InvokeServer(unpack(args)) end) end)
-
-        task.wait(delayCharge) -- Slider: Delay Fishing
-
+        task.wait(delayCharge) 
         pcall(function() CompleteGame:FireServer() end)
-
-        -- 2. Reset Akhir (UPDATED)
-        -- Menggunakan delayReset dari slider baru
         task.wait(delayReset) 
-        
         pcall(function() CancelInput:InvokeServer() end)
         task.wait(0.05)
     end
@@ -155,55 +194,26 @@ local function startFishingSuperInstantLoop()
 end
 
 -- =====================================================
--- ⚙️ BAGIAN 5: FITUR LAIN
+-- ⚙️ BAGIAN 6: FITUR LAIN (FPS, VFX, WATER WALK)
 -- =====================================================
-local Lighting = game:GetService("Lighting")
-local Terrain = workspace:FindFirstChildWhichIsA("Terrain")
-local Players = game:GetService("Players")
-local PlayerGui = Players.LocalPlayer:WaitForChild("PlayerGui")
-local RunService = game:GetService("RunService")
-
-local function SaveLighting()
-    if not SettingsState.FPSBoost.BackupLighting.GlobalShadows then
-        SettingsState.FPSBoost.BackupLighting = {
-            GlobalShadows = Lighting.GlobalShadows, FogStart = Lighting.FogStart, FogEnd = Lighting.FogEnd,
-            Brightness = Lighting.Brightness, ExposureCompensation = Lighting.ExposureCompensation
-        }
-    end
-end
-
 local function ToggleFPSBoost(state)
-    SettingsState.FPSBoost.Active = state
     if state then
-        SaveLighting()
         pcall(function()
             settings().Rendering.QualityLevel = 1
-            Lighting.GlobalShadows = false
-            Lighting.FogStart = 9e9; Lighting.FogEnd = 9e9; Lighting.Brightness = 2
+            game:GetService("Lighting").GlobalShadows = false
         end)
-        if Terrain then Terrain.WaterWaveSize = 0; Terrain.WaterWaveSpeed = 0; Terrain.WaterTransparency = 1 end
         for _, v in pairs(game:GetDescendants()) do
-            if v:IsA("BasePart") and not v:IsA("MeshPart") then v.Material = Enum.Material.Plastic; v.CastShadow = false end
+            if v:IsA("BasePart") then v.Material = Enum.Material.Plastic; v.CastShadow = false end
         end
-    else
-        local bk = SettingsState.FPSBoost.BackupLighting
-        pcall(function()
-            Lighting.GlobalShadows = bk.GlobalShadows; Lighting.FogStart = bk.FogStart; Lighting.FogEnd = bk.FogEnd
-            Lighting.Brightness = bk.Brightness; Lighting.ExposureCompensation = bk.ExposureCompensation
-        end)
-        if Terrain then Terrain.WaterWaveSize = 0.15; Terrain.WaterWaveSpeed = 10; Terrain.WaterTransparency = 0.3 end
     end
 end
 
 local function ExecuteRemoveVFX()
     local function KillVFX(obj)
-        if obj:IsA("ParticleEmitter") or obj:IsA("Trail") or obj:IsA("Beam") or obj:IsA("Smoke") or obj:IsA("Fire") or obj:IsA("Sparkles") then
+        if obj:IsA("ParticleEmitter") or obj:IsA("Trail") or obj:IsA("Beam") then
             obj.Enabled = false
-            if obj:IsA("Beam") or obj:IsA("Trail") or obj:IsA("ParticleEmitter") then obj.Transparency = NumberSequence.new(1) end
-        elseif obj:IsA("PointLight") or obj:IsA("SpotLight") or obj:IsA("SurfaceLight") then obj.Enabled = false
-        elseif obj:IsA("Explosion") then obj.Visible = false
-        elseif obj:IsA("Highlight") then obj.Enabled = false
-        end
+            obj.Transparency = NumberSequence.new(1)
+        elseif obj:IsA("Explosion") then obj.Visible = false end
     end
     for _, v in pairs(game:GetDescendants()) do pcall(function() KillVFX(v) end) end
     workspace.DescendantAdded:Connect(function(child)
@@ -225,7 +235,6 @@ end
 
 local function StartAntiAFK()
     local VirtualUser = game:GetService("VirtualUser")
-    local LocalPlayer = Players.LocalPlayer
     if getconnections then
         for _, conn in pairs(getconnections(LocalPlayer.Idled)) do
             if conn.Disable then conn:Disable() elseif conn.Disconnect then conn:Disconnect() end
@@ -238,11 +247,137 @@ local function StartAntiAFK()
         end)
     end)
 end
+-- [[ NEW: WATER WALK (ANTI-FLY FIX) ]]
+local function ToggleWaterWalk(state)
+    if state then
+        local p = Instance.new("Part")
+        p.Name = "UQiLL_WaterPlatform"
+        p.Anchored = true
+        p.CanCollide = true
+        p.Transparency = 1
+        p.Size = Vector3.new(15, 1, 15)
+        p.Parent = Workspace
+        SettingsState.WaterWalk.Part = p
+
+        SettingsState.WaterWalk.Connection = RunService.Heartbeat:Connect(function()
+            local Char = Players.LocalPlayer.Character
+            if Char and Char:FindFirstChild("HumanoidRootPart") and SettingsState.WaterWalk.Part then
+                local hrpPos = Char.HumanoidRootPart.Position
+                
+                -- PERBAIKAN UTAMA:
+                -- Jangan ikuti Y karakter (hrpPos.Y).
+                -- Kunci Y di angka -2 (Ketinggian rata-rata air).
+                -- Ini membuat lantai TETAP di permukaan laut, tidak ikut naik saat karakter loncat.
+                
+                SettingsState.WaterWalk.Part.CFrame = CFrame.new(hrpPos.X, -2, hrpPos.Z)
+            end
+        end)
+    else
+        if SettingsState.WaterWalk.Connection then 
+            SettingsState.WaterWalk.Connection:Disconnect() 
+            SettingsState.WaterWalk.Connection = nil
+        end
+        if SettingsState.WaterWalk.Part then 
+            SettingsState.WaterWalk.Part:Destroy() 
+            SettingsState.WaterWalk.Part = nil
+        end
+    end
+end
 
 -- =====================================================
--- 🎨 BAGIAN 6: WIND UI SETUP
+-- 🌌 BAGIAN 7: TELEPORT SYSTEM
 -- =====================================================
+local Waypoints = {
+    ["Fisherman Island"]    = Vector3.new(-33, 10, 2770),
+    ["Traveling Merchant"]  = Vector3.new(-135, 2, 2764),
+    ["Kohana"]              = Vector3.new(-626, 16, 588),
+    ["Kohana Lava"]         = Vector3.new(-594, 59, 112),
+    ["Esoteric Island"]     = Vector3.new(1991, 6, 1390),
+    ["Esoteric Depths"]     = Vector3.new(3240, -1302, 1404),
+    ["Tropical Grove"]      = Vector3.new(-2132, 53, 3630),
+    ["Coral Reef"]          = Vector3.new(-3138, 4, 2132),
+    ["Weather Machine"]     = Vector3.new(-1517, 3, 1910),
+    ["Sisyphus Statue"]     = Vector3.new(-3657, -134, -963),
+    ["Treasure Room"]       = Vector3.new(-3604, -284, -1632),
+    ["Ancient Jungle"]      = Vector3.new(1463, 8, -358),
+    ["Ancient Ruin"]        = Vector3.new(6021, -586, 4633),
+    ["Sacred Temple"]       = Vector3.new(1476, -22, -632)
+}
 
+local function TeleportTo(targetPos)
+    if LocalPlayer.Character and LocalPlayer.Character:FindFirstChild("HumanoidRootPart") then
+        local HRP = LocalPlayer.Character.HumanoidRootPart
+        HRP.AssemblyLinearVelocity = Vector3.new(0,0,0) 
+        HRP.CFrame = CFrame.new(targetPos + Vector3.new(0, 3, 0))
+    end
+end
+
+local function TeleportToMegalodon()
+    local ringsFolder = Workspace:FindFirstChild("!!! MENU RINGS")
+    if not ringsFolder then return end
+    local propsFolder = ringsFolder:FindFirstChild("Props")
+    if not propsFolder then return end
+    local eventModel = propsFolder:FindFirstChild("Megalodon Hunt")
+    
+    if eventModel then
+        local topPart = eventModel:FindFirstChild("Top")
+        if topPart and topPart:FindFirstChild("BlackHole") then
+            TeleportTo(topPart.BlackHole.Position + Vector3.new(0, 20, 0))
+        else
+            TeleportTo(eventModel:GetPivot().Position)
+        end
+    end
+end
+
+local CoordDisplay = nil 
+local LivePosToggle = nil 
+
+local function TogglePosWatcher(state)
+    SettingsState.PosWatcher.Active = state
+    if state then
+        SettingsState.PosWatcher.Connection = RunService.RenderStepped:Connect(function()
+            local Char = Players.LocalPlayer.Character
+            if Char and Char:FindFirstChild("HumanoidRootPart") then
+                local pos = Char.HumanoidRootPart.Position
+                local txt = string.format("X: %.1f | Y: %.1f | Z: %.1f", pos.X, pos.Y, pos.Z)
+                if CoordDisplay then pcall(function() CoordDisplay:SetDesc(txt) end) end
+                if LivePosToggle then pcall(function() LivePosToggle:SetDesc(txt) end) end
+            end
+        end)
+    else
+        if SettingsState.PosWatcher.Connection then SettingsState.PosWatcher.Connection:Disconnect() end
+        if CoordDisplay then pcall(function() CoordDisplay:SetDesc("Status: Off") end) end
+        if LivePosToggle then pcall(function() LivePosToggle:SetDesc("Click to show coordinates") end) end
+    end
+end
+
+local function FindPlayer(name)
+    name = string.lower(name)
+    for _, p in pairs(Players:GetPlayers()) do
+        if p ~= LocalPlayer then
+            if string.find(string.lower(p.Name), name) or string.find(string.lower(p.DisplayName), name) then
+                return p
+            end
+        end
+    end
+    return nil
+end
+local function GetPlayerList()
+    local names = {}
+    for _, p in pairs(Players:GetPlayers()) do
+        if p ~= LocalPlayer then table.insert(names, p.Name) end
+    end
+    table.sort(names)
+    return names
+end
+
+local zoneNames = {}
+for name, _ in pairs(Waypoints) do table.insert(zoneNames, name) end
+table.sort(zoneNames)
+
+-- =====================================================
+-- 🎨 BAGIAN 8: WIND UI SETUP
+-- =====================================================
 local function setElementVisible(name, visible)
     task.spawn(function()
         local CoreGui = game:GetService("CoreGui")
@@ -270,70 +405,54 @@ end
 
 local WindUI = loadstring(game:HttpGet("https://github.com/Footagesus/WindUI/releases/latest/download/main.lua"))()
 local Window = WindUI:CreateWindow({ Title = "UQiLL", Icon = "door-open", Author = "by UQi", Transparent = true })
-Window:Tag({ Title = "v.1.0.0", Icon = "github", Color = Color3.fromHex("#30ff6a"), Radius = 0 })
+Window.Name = GUI_NAMES.Main 
+Window:Tag({ Title = "v.2.2", Icon = "github", Color = Color3.fromHex("#30ff6a"), Radius = 0 })
 Window:SetToggleKey(Enum.KeyCode.H)
 
+local TabPlayer = Window:Tab({ Title = "Player Setting", Icon = "user" })
 local TabFishing = Window:Tab({ Title = "Auto Fishing", Icon = "fish" })
 local TabSell = Window:Tab({ Title = "Auto Sell", Icon = "shopping-bag" })
+local TabWeather = Window:Tab({ Title = "Weather", Icon = "cloud-lightning" })
+local TabTeleport = Window:Tab({ Title = "Teleport", Icon = "map-pin" })
 local TabSettings = Window:Tab({ Title = "Settings", Icon = "settings" })
 
+
+-- Toggle: Water Walk (NEW!)
+TabPlayer:Toggle({
+    Title = "Walk on Water",
+    Desc = "Creates a platform below you",
+    Icon = "waves",
+    Value = false,
+    Callback = function(state)
+        ToggleWaterWalk(state)
+        WindUI:Notify({Title = "Movement", Content = state and "Water Walk ON" or "Water Walk OFF", Duration = 2})
+    end
+})
+
 -- [[ TAB 1: FISHING ]]
-local Dropdown = TabFishing:Dropdown({
+TabFishing:Dropdown({
     Title = "Category Fishing", Desc = "Select Mode",
     Values = {"Instant", "Blatan"}, Value = "Instant",
     Callback = function(option)
         instant, superInstant = (option == "Instant"), (option == "Blatan")
-        
-        -- Reset semua slider
-        setElementVisible("Delay Fishing", false)
-        setElementVisible("Delay Catch", false)
-        setElementVisible("Reset Delay", false) -- Reset Delay juga dihide dulu
-
-        if instant then
-            setElementVisible("Delay Catch", true)
-        elseif superInstant then
-            setElementVisible("Delay Fishing", true)
-            setElementVisible("Reset Delay", true) -- Munculkan di mode Blatan
-            delayCharge = 1.15 
-        end
+        setElementVisible("Delay Fishing", false); setElementVisible("Delay Catch", false); setElementVisible("Reset Delay", false)
+        if instant then setElementVisible("Delay Catch", true)
+        elseif superInstant then setElementVisible("Delay Fishing", true); setElementVisible("Reset Delay", true) end
     end
 })
-
-local ChargeSlider = TabFishing:Slider({
-    Title = "Delay Fishing", Desc = "Wait Fish (Blatan)", Step = 0.01,
-    Value = { Min = 0, Max = 3, Default = 1.15 },
-    Callback = function(value) delayCharge = value end
-})
-
--- SLIDER BARU: Reset Delay
-local ResetSlider = TabFishing:Slider({
-    Title = "Reset Delay", 
-    Desc = "After Catch Delay (Blatan)", 
-    Step = 0.01,
-    Value = { Min = 0, Max = 1, Default = 0.2 }, -- Default 0.2 sesuai request
-    Callback = function(value) 
-        delayReset = value 
-    end
-})
-
-local CatchSlider = TabFishing:Slider({
-    Title = "Delay Catch", Desc = "Instant Speed", Step = 0.01,
-    Value = { Min = 0.1, Max = 3, Default = 0.56 },
-    Callback = function(value) delayTime = value end
-})
-
-local Toggle = TabFishing:Toggle({
+TabFishing:Slider({ Title = "Delay Fishing", Desc = "Wait Fish (Blatan)", Step = 0.01, Value = { Min = 0, Max = 3, Default = 1.15 }, Callback = function(value) delayCharge = value end })
+TabFishing:Slider({ Title = "Reset Delay", Desc = "After Catch (Blatan)", Step = 0.01, Value = { Min = 0, Max = 1, Default = 0.2 }, Callback = function(value) delayReset = value end })
+TabFishing:Slider({ Title = "Delay Catch", Desc = "Instant Speed", Step = 0.01, Value = { Min = 0.1, Max = 3, Default = 0.56 }, Callback = function(value) delayTime = value end })
+TabFishing:Toggle({
     Title = "Activate Fishing", Desc = "Start/Stop Loop", Icon = "check", Value = false,
     Callback = function(state)
         getgenv().fishingStart = state 
         if state then
             pcall(function() CancelInput:InvokeServer() end)
-            if superInstant then task.spawn(startFishingSuperInstantLoop)
-            else task.spawn(startFishingLoop) end
+            if superInstant then task.spawn(startFishingSuperInstantLoop) else task.spawn(startFishingLoop) end
             WindUI:Notify({Title = "Fishing", Content = "Started!", Duration = 2})
         else
-            pcall(function() CompleteGame:FireServer() end)
-            pcall(function() CancelInput:InvokeServer() end)
+            pcall(function() CompleteGame:FireServer() end); pcall(function() CancelInput:InvokeServer() end)
             WindUI:Notify({Title = "Fishing", Content = "Stopped", Duration = 2})
         end
     end
@@ -341,37 +460,64 @@ local Toggle = TabFishing:Toggle({
 
 -- [[ TAB 2: AUTO SELL ]]
 TabSell:Toggle({
-    Title = "Auto Sell (Time)", Desc = "Pauses fishing to sell", Icon = "timer", Value = false,
+    Title = "Auto Sell (Time)", Desc = "Safe Pauses Fishing to Sell", Icon = "timer", Value = false,
     Callback = function(state)
         SettingsState.AutoSell.TimeActive = state
-        if state then
-            StartAutoSellLoop() 
-            WindUI:Notify({Title = "Auto Sell", Content = "Loop Started", Duration = 2})
-        else
-            SettingsState.AutoSell.IsSelling = false 
-            WindUI:Notify({Title = "Auto Sell", Content = "Loop Stopped", Duration = 2})
-        end
+        if state then StartAutoSellLoop(); WindUI:Notify({Title = "Auto Sell", Content = "Loop Started", Duration = 2})
+        else SettingsState.AutoSell.IsSelling = false; WindUI:Notify({Title = "Auto Sell", Content = "Loop Stopped", Duration = 2}) end
     end
 })
-
-TabSell:Slider({
-    Title = "Sell Interval (Seconds)", Desc = "Time between sells", Step = 1,
-    Value = { Min = 10, Max = 300, Default = 60 }, 
-    Callback = function(value) SettingsState.AutoSell.TimeInterval = value end
-})
-
+TabSell:Slider({ Title = "Sell Interval (Seconds)", Desc = "Time between sells", Step = 1, Value = { Min = 10, Max = 300, Default = 60 }, Callback = function(value) SettingsState.AutoSell.TimeInterval = value end })
 TabSell:Button({ Title = "Sell Now", Desc = "Sell All Items Immediately", Icon = "trash-2", Callback = function()
     task.spawn(function()
-        SettingsState.AutoSell.IsSelling = true -- Pause Fishing
-        task.wait(0.2)
-        pcall(function() SellAll:InvokeServer() end)
-        WindUI:Notify({Title = "Sell All", Content = "Sold!", Duration = 2})
-        task.wait(0.5)
-        SettingsState.AutoSell.IsSelling = false -- Resume Fishing
+        SettingsState.AutoSell.IsSelling = true; task.wait(0.2); pcall(function() SellAll:InvokeServer() end)
+        WindUI:Notify({Title = "Sell All", Content = "Sold!", Duration = 2}); task.wait(0.5); SettingsState.AutoSell.IsSelling = false
     end)
 end })
 
--- [[ TAB 3: SETTINGS ]]
+-- [[ TAB 3: WEATHER ]]
+TabWeather:Dropdown({ Title = "Select Weather(s)", Desc = "Choose multiple weathers to maintain", Values = {"Wind", "Cloudy", "Snow", "Storm", "Radiant"}, Value = {}, Multi = true, AllowNone = true, Callback = function(option) SettingsState.AutoWeather.SelectedList = option end })
+TabWeather:Toggle({ Title = "Smart Monitor", Desc = "Checks every 15s", Icon = "cloud-lightning", Value = false, Callback = function(state)
+    SettingsState.AutoWeather.Active = state
+    if state then StartSmartWeatherLoop(); WindUI:Notify({Title = "Weather", Content = "Monitor Started", Duration = 2})
+    else WindUI:Notify({Title = "Weather", Content = "Monitor Stopped", Duration = 2}) end
+end })
+
+-- [[ TAB 4: TELEPORT ]]
+TabTeleport:Section({ Title = "Event" })
+TabTeleport:Button({ Title = "Teleport to Megalodon", Desc = "Please on Walk on Water Inside Player Menus", Icon = "skull", Callback = function() TeleportToMegalodon() end })
+
+TabTeleport:Section({ Title = "Islands" }) 
+local TP_Dropdown = TabTeleport:Dropdown({ Title = "Select Island", Desc = "Fixed GPS Coordinates", Values = zoneNames, Value = zoneNames[1] or "Select", Callback = function(val) selectedZone = val end })
+TabTeleport:Button({ Title = "Teleport to Island", Desc = "Warp to selected location", Icon = "navigation", Callback = function() if selectedZone and Waypoints[selectedZone] then TeleportTo(Waypoints[selectedZone]) else WindUI:Notify({Title = "Error", Content = "Coordinates missing", Duration = 2}) end end })
+TabTeleport:Button({ Title = "Refresh List", Icon = "refresh-cw", Callback = function() WindUI:Notify({Title = "System", Content = "Static list reloaded", Duration = 1}) end })
+
+TabTeleport:Section({ Title = "Player Teleport" })
+local targetPlayerName = ""
+local playerNames = GetPlayerList()
+local PlayerDropdown = TabTeleport:Dropdown({ Title = "Select Player", Desc = "List of players in server", Values = playerNames, Value = playerNames[1] or "None", Callback = function(val) targetPlayerName = val end })
+TabTeleport:Button({ Title = "Teleport to Player", Desc = "Go to target player", Icon = "user", Callback = function()
+    local target = FindPlayer(targetPlayerName)
+    if target and target.Character and target.Character:FindFirstChild("HumanoidRootPart") then
+        TeleportTo(target.Character.HumanoidRootPart.Position + Vector3.new(3, 0, 0))
+        WindUI:Notify({Title = "Teleport", Content = "Warped to " .. target.Name, Duration = 2})
+    else WindUI:Notify({Title = "Error", Content = "Player not found!", Duration = 2}) end
+end })
+TabTeleport:Button({ Title = "Refresh Players", Desc = "Update list", Icon = "refresh-cw", Callback = function() local newPlayers = GetPlayerList(); PlayerDropdown:Refresh(newPlayers, newPlayers[1] or "None"); WindUI:Notify({Title = "System", Content = "List updated!", Duration = 2}) end })
+
+TabTeleport:Section({ Title = "Coordinate Tools" })
+LivePosToggle = TabTeleport:Toggle({ Title = "Show Live Pos", Desc = "Click to show coordinates", Icon = "monitor", Value = false, Callback = function(state) TogglePosWatcher(state) end })
+CoordDisplay = TabTeleport:Paragraph({ Title = "Current Position", Desc = "Status: Off" })
+TabTeleport:Button({ Title = "Copy Position", Desc = "Copy 'Vector3.new(...)'", Icon = "copy", Callback = function()
+    local Char = Players.LocalPlayer.Character
+    if Char and Char:FindFirstChild("HumanoidRootPart") then
+        local pos = Char.HumanoidRootPart.Position
+        local str = string.format("Vector3.new(%.0f, %.0f, %.0f)", pos.X, pos.Y, pos.Z)
+        if setclipboard then setclipboard(str); WindUI:Notify({Title = "Copied!", Content = "Saved", Duration = 2}) else print("📍 COPIED: " .. str); WindUI:Notify({Title = "Error", Content = "Check F9", Duration = 2}) end
+    end
+end })
+
+-- [[ TAB 5: SETTINGS ]]
 TabSettings:Button({ Title = "Anti-AFK", Desc = "Status: Active (Always On)", Icon = "clock", Callback = function() WindUI:Notify({ Title = "Anti-AFK", Content = "Permanently Active", Duration = 2 }) end })
 
 TabSettings:Button({ Title = "Destroy Fish Popup", Desc = "Permanently removes 'Small Notification' UI", Icon = "trash-2", Callback = function()
@@ -380,9 +526,7 @@ TabSettings:Button({ Title = "Destroy Fish Popup", Desc = "Permanently removes '
     ExecuteDestroyPopup()
     WindUI:Notify({Title = "UI", Content = "Popup Destroyed!", Duration = 3})
 end })
-
 TabSettings:Toggle({ Title = "FPS Boost (Potato)", Desc = "Low Graphics", Icon = "monitor", Value = false, Callback = function(state) ToggleFPSBoost(state) end })
-
 TabSettings:Button({ Title = "Remove VFX (Permanent)", Desc = "Delete Effects", Icon = "trash-2", Callback = function()
     if SettingsState.VFXRemoved then WindUI:Notify({Title = "VFX", Content = "Already Removed!", Duration = 2}) return end
     SettingsState.VFXRemoved = true
@@ -390,92 +534,11 @@ TabSettings:Button({ Title = "Remove VFX (Permanent)", Desc = "Delete Effects", 
     WindUI:Notify({Title = "VFX", Content = "Deleted!", Duration = 2})
 end })
 
--- -- =====================================================
--- -- 📱 7. MOBILE TOGGLE BUTTON (DRAGGABLE)
--- -- =====================================================
--- local Vim = game:GetService("VirtualInputManager")
--- local MobileScreen = Instance.new("ScreenGui")
--- MobileScreen.Name = "MobileToggleUI"
--- MobileScreen.Parent = CoreGui
-
--- local MobileBtn = Instance.new("TextButton")
--- MobileBtn.Name = "ToggleBtn"
--- MobileBtn.Parent = MobileScreen
--- MobileBtn.BackgroundColor3 = Color3.fromHex("#30ff6a")
--- MobileBtn.Position = UDim2.new(0.8, 0, 0.2, 0)
--- MobileBtn.Size = UDim2.new(0, 50, 0, 50)
--- MobileBtn.Text = "U"
--- MobileBtn.TextColor3 = Color3.new(0, 0, 0)
--- MobileBtn.TextSize = 20
--- MobileBtn.Font = Enum.Font.GothamBold
--- MobileBtn.AutoButtonColor = true
-
--- local UICorner = Instance.new("UICorner")
--- UICorner.CornerRadius = UDim.new(1, 0)
--- UICorner.Parent = MobileBtn
-
--- local UIStroke = Instance.new("UIStroke")
--- UIStroke.Thickness = 2
--- UIStroke.Color = Color3.new(0, 0, 0)
--- UIStroke.Parent = MobileBtn
-
--- -- [[ DRAGGABLE LOGIC ]] --
--- local function MakeDraggable(gui)
---     local UserInputService = game:GetService("UserInputService")
---     local dragging, dragInput, dragStart, startPos
-
---     local function update(input)
---         local delta = input.Position - dragStart
---         gui.Position = UDim2.new(startPos.X.Scale, startPos.X.Offset + delta.X, startPos.Y.Scale, startPos.Y.Offset + delta.Y)
---     end
-
---     gui.InputBegan:Connect(function(input)
---         if input.UserInputType == Enum.UserInputType.MouseButton1 or input.UserInputType == Enum.UserInputType.Touch then
---             dragging = true
---             dragStart = input.Position
---             startPos = gui.Position
-            
---             input.Changed:Connect(function()
---                 if input.UserInputState == Enum.UserInputState.End then
---                     dragging = false
---                 end
---             end)
---         end
---     end)
-
---     gui.InputChanged:Connect(function(input)
---         if input.UserInputType == Enum.UserInputType.MouseMovement or input.UserInputType == Enum.UserInputType.Touch then
---             dragInput = input
---         end
---     end)
-
---     UserInputService.InputChanged:Connect(function(input)
---         if input == dragInput and dragging then
---             update(input)
---         end
---     end)
--- end
-
--- MakeDraggable(MobileBtn) -- Aktifkan fitur geser
-
--- MobileBtn.MouseButton1Click:Connect(function()
---     Vim:SendKeyEvent(true, Enum.KeyCode.H, false, game)
---     task.wait()
---     Vim:SendKeyEvent(false, Enum.KeyCode.H, false, game)
--- end)
-
 -- Init
 task.delay(1, function()
-    setElementVisible("Delay Fishing", false)
-    setElementVisible("Delay Catch", false)
-    setElementVisible("Reset Delay", false) -- Hide default
-
-    if instant then
-        setElementVisible("Delay Catch", true)
-    elseif superInstant then
-        setElementVisible("Delay Fishing", true)
-        setElementVisible("Reset Delay", true) -- Show in Blatan
-    end
+    setElementVisible("Delay Fishing", false); setElementVisible("Delay Catch", false); setElementVisible("Reset Delay", false)
+    if instant then setElementVisible("Delay Catch", true)
+    elseif superInstant then setElementVisible("Delay Fishing", true); setElementVisible("Reset Delay", true) end
 end)
 
 task.spawn(StartAntiAFK)
