@@ -1,6 +1,6 @@
 --[[ 
     FILE: fishing.lua
-    VERSION: 2.2 (Turbo Loop + Fixed Walk on Water + Final UI)
+    VERSION: 2.7 (Turbo Loop + Player Toggles)
 ]]
 
 -- =====================================================
@@ -12,7 +12,11 @@ if getgenv().fishingStart then
 end
 
 local CoreGui = game:GetService("CoreGui")
-local GUI_NAMES = {"UQiLL_Fishing_UI", "UQiLL_Mobile_Button", "UQiLL_PosHUD"}
+local GUI_NAMES = {
+    Main = "UQiLL_Fishing_UI",
+    Mobile = "UQiLL_Mobile_Button",
+    Coords = "UQiLL_Coords_HUD"
+}
 
 for _, v in pairs(CoreGui:GetChildren()) do
     for _, name in pairs(GUI_NAMES) do
@@ -47,12 +51,16 @@ local delayReset = 0.2
 
 local rs = game:GetService("ReplicatedStorage")
 local net = rs.Packages["_Index"]["sleitnick_net@0.2.0"].net
+
+-- Remote Definitions
 local ChargeRod    = net["RF/ChargeFishingRod"]
 local RequestGame  = net["RF/RequestFishingMinigameStarted"]
 local CompleteGame = net["RE/FishingCompleted"]
 local CancelInput  = net["RF/CancelFishingInputs"]
 local SellAll      = net["RF/SellAllItems"] 
 local PurchaseWeather = net["RF/PurchaseWeatherEvent"]
+local EquipTank    = net["RF/EquipOxygenTank"]
+local UpdateRadar  = net["RF/UpdateFishingRadar"]
 
 local SettingsState = { 
     FPSBoost = { Active = false, BackupLighting = {} }, 
@@ -69,7 +77,7 @@ local SettingsState = {
         Targets = {} 
     },
     PosWatcher = { Active = false, Connection = nil },
-    WaterWalk = { Active = false, Part = nil, Connection = nil } -- State Baru
+    WaterWalk = { Active = false, Part = nil, Connection = nil } 
 }
 
 local Workspace = game:GetService("Workspace")
@@ -194,7 +202,7 @@ local function startFishingSuperInstantLoop()
 end
 
 -- =====================================================
--- ⚙️ BAGIAN 6: FITUR LAIN (FPS, VFX, WATER WALK)
+-- ⚙️ BAGIAN 6: FITUR LAIN
 -- =====================================================
 local function ToggleFPSBoost(state)
     if state then
@@ -247,7 +255,8 @@ local function StartAntiAFK()
         end)
     end)
 end
--- [[ NEW: WATER WALK (ANTI-FLY FIX) ]]
+
+-- WATER WALK (FIXED)
 local function ToggleWaterWalk(state)
     if state then
         local p = Instance.new("Part")
@@ -263,13 +272,7 @@ local function ToggleWaterWalk(state)
             local Char = Players.LocalPlayer.Character
             if Char and Char:FindFirstChild("HumanoidRootPart") and SettingsState.WaterWalk.Part then
                 local hrpPos = Char.HumanoidRootPart.Position
-                
-                -- PERBAIKAN UTAMA:
-                -- Jangan ikuti Y karakter (hrpPos.Y).
-                -- Kunci Y di angka -2 (Ketinggian rata-rata air).
-                -- Ini membuat lantai TETAP di permukaan laut, tidak ikut naik saat karakter loncat.
-                
-                SettingsState.WaterWalk.Part.CFrame = CFrame.new(hrpPos.X, -2, hrpPos.Z)
+                SettingsState.WaterWalk.Part.CFrame = CFrame.new(hrpPos.X, -3.1, hrpPos.Z)
             end
         end)
     else
@@ -406,7 +409,7 @@ end
 local WindUI = loadstring(game:HttpGet("https://github.com/Footagesus/WindUI/releases/latest/download/main.lua"))()
 local Window = WindUI:CreateWindow({ Title = "UQiLL", Icon = "door-open", Author = "by UQi", Transparent = true })
 Window.Name = GUI_NAMES.Main 
-Window:Tag({ Title = "v.2.2", Icon = "github", Color = Color3.fromHex("#30ff6a"), Radius = 0 })
+Window:Tag({ Title = "v.1.1.1", Icon = "github", Color = Color3.fromHex("#30ff6a"), Radius = 0 })
 Window:SetToggleKey(Enum.KeyCode.H)
 
 local TabPlayer = Window:Tab({ Title = "Player Setting", Icon = "user" })
@@ -416,76 +419,61 @@ local TabWeather = Window:Tab({ Title = "Weather", Icon = "cloud-lightning" })
 local TabTeleport = Window:Tab({ Title = "Teleport", Icon = "map-pin" })
 local TabSettings = Window:Tab({ Title = "Settings", Icon = "settings" })
 
-
--- Toggle: Water Walk (NEW!)
+-- [[ TAB PLAYER: UTILITIES (UPDATED TOGGLES) ]]
 TabPlayer:Toggle({
-    Title = "Walk on Water",
-    Desc = "Creates a platform below you",
-    Icon = "waves",
-    Value = false,
-    Callback = function(state)
-        ToggleWaterWalk(state)
-        WindUI:Notify({Title = "Movement", Content = state and "Water Walk ON" or "Water Walk OFF", Duration = 2})
-    end
+    Title = "Walk on Water", Desc = "Creates a platform below you", Icon = "waves", Value = false, 
+    Callback = function(state) ToggleWaterWalk(state); WindUI:Notify({Title = "Movement", Content = state and "Water Walk ON" or "Water Walk OFF", Duration = 2}) end
 })
 
--- [[ TAB 1: FISHING ]]
-TabFishing:Dropdown({
-    Title = "Category Fishing", Desc = "Select Mode",
-    Values = {"Instant", "Blatan"}, Value = "Instant",
-    Callback = function(option)
-        instant, superInstant = (option == "Instant"), (option == "Blatan")
-        setElementVisible("Delay Fishing", false); setElementVisible("Delay Catch", false); setElementVisible("Reset Delay", false)
-        if instant then setElementVisible("Delay Catch", true)
-        elseif superInstant then setElementVisible("Delay Fishing", true); setElementVisible("Reset Delay", true) end
-    end
-})
-TabFishing:Slider({ Title = "Delay Fishing", Desc = "Wait Fish (Blatan)", Step = 0.01, Value = { Min = 0, Max = 3, Default = 1.15 }, Callback = function(value) delayCharge = value end })
-TabFishing:Slider({ Title = "Reset Delay", Desc = "After Catch (Blatan)", Step = 0.01, Value = { Min = 0, Max = 1, Default = 0.2 }, Callback = function(value) delayReset = value end })
-TabFishing:Slider({ Title = "Delay Catch", Desc = "Instant Speed", Step = 0.01, Value = { Min = 0.1, Max = 3, Default = 0.56 }, Callback = function(value) delayTime = value end })
-TabFishing:Toggle({
-    Title = "Activate Fishing", Desc = "Start/Stop Loop", Icon = "check", Value = false,
+TabPlayer:Toggle({
+    Title = "Equip Diving Gear", Desc = "Toggle Oxygen Tank (105)", Icon = "anchor", Value = false,
     Callback = function(state)
-        getgenv().fishingStart = state 
         if state then
-            pcall(function() CancelInput:InvokeServer() end)
-            if superInstant then task.spawn(startFishingSuperInstantLoop) else task.spawn(startFishingLoop) end
-            WindUI:Notify({Title = "Fishing", Content = "Started!", Duration = 2})
+            pcall(function() EquipTank:InvokeServer(105) end)
+            WindUI:Notify({Title = "Item", Content = "Diving Gear Equipped", Duration = 2})
         else
-            pcall(function() CompleteGame:FireServer() end); pcall(function() CancelInput:InvokeServer() end)
-            WindUI:Notify({Title = "Fishing", Content = "Stopped", Duration = 2})
+            -- Logic unequip manual: Cari tool di karakter, pindah ke backpack
+            local Char = Players.LocalPlayer.Character
+            local Backpack = Players.LocalPlayer.Backpack
+            if Char then
+                for _, t in pairs(Char:GetChildren()) do
+                    if t:IsA("Tool") and (string.find(t.Name, "Oxygen") or string.find(t.Name, "Tank") or string.find(t.Name, "Diving")) then
+                        t.Parent = Backpack
+                    end
+                end
+            end
+            WindUI:Notify({Title = "Item", Content = "Diving Gear Unequipped", Duration = 2})
         end
     end
 })
 
--- [[ TAB 2: AUTO SELL ]]
-TabSell:Toggle({
-    Title = "Auto Sell (Time)", Desc = "Safe Pauses Fishing to Sell", Icon = "timer", Value = false,
+TabPlayer:Toggle({
+    Title = "Equip Radar", Desc = "Toggle Fishing Radar", Icon = "radar", Value = false,
     Callback = function(state)
-        SettingsState.AutoSell.TimeActive = state
-        if state then StartAutoSellLoop(); WindUI:Notify({Title = "Auto Sell", Content = "Loop Started", Duration = 2})
-        else SettingsState.AutoSell.IsSelling = false; WindUI:Notify({Title = "Auto Sell", Content = "Loop Stopped", Duration = 2}) end
+        pcall(function() UpdateRadar:InvokeServer(state) end)
+        WindUI:Notify({Title = "Item", Content = state and "Radar ON" or "Radar OFF", Duration = 2})
     end
 })
+
+-- [[ TAB 1: FISHING ]]
+TabFishing:Dropdown({ Title = "Category Fishing", Desc = "Select Mode", Values = {"Instant", "Blatan"}, Value = "Instant", Callback = function(option) instant, superInstant = (option == "Instant"), (option == "Blatan"); setElementVisible("Delay Fishing", false); setElementVisible("Delay Catch", false); setElementVisible("Reset Delay", false); if instant then setElementVisible("Delay Catch", true) elseif superInstant then setElementVisible("Delay Fishing", true); setElementVisible("Reset Delay", true) end end })
+TabFishing:Slider({ Title = "Delay Fishing", Desc = "Wait Fish (Blatan)", Step = 0.01, Value = { Min = 0, Max = 3, Default = 1.15 }, Callback = function(value) delayCharge = value end })
+TabFishing:Slider({ Title = "Reset Delay", Desc = "After Catch (Blatan)", Step = 0.01, Value = { Min = 0, Max = 1, Default = 0.2 }, Callback = function(value) delayReset = value end })
+TabFishing:Slider({ Title = "Delay Catch", Desc = "Instant Speed", Step = 0.01, Value = { Min = 0.1, Max = 3, Default = 0.56 }, Callback = function(value) delayTime = value end })
+TabFishing:Toggle({ Title = "Activate Fishing", Desc = "Start/Stop Loop", Icon = "check", Value = false, Callback = function(state) getgenv().fishingStart = state; if state then pcall(function() CancelInput:InvokeServer() end); if superInstant then task.spawn(startFishingSuperInstantLoop) else task.spawn(startFishingLoop) end; WindUI:Notify({Title = "Fishing", Content = "Started!", Duration = 2}) else pcall(function() CompleteGame:FireServer() end); pcall(function() CancelInput:InvokeServer() end); WindUI:Notify({Title = "Fishing", Content = "Stopped", Duration = 2}) end end })
+
+-- [[ TAB 2: AUTO SELL ]]
+TabSell:Toggle({ Title = "Auto Sell (Time)", Desc = "Safe Pauses Fishing to Sell", Icon = "timer", Value = false, Callback = function(state) SettingsState.AutoSell.TimeActive = state; if state then StartAutoSellLoop(); WindUI:Notify({Title = "Auto Sell", Content = "Loop Started", Duration = 2}) else SettingsState.AutoSell.IsSelling = false; WindUI:Notify({Title = "Auto Sell", Content = "Loop Stopped", Duration = 2}) end end })
 TabSell:Slider({ Title = "Sell Interval (Seconds)", Desc = "Time between sells", Step = 1, Value = { Min = 10, Max = 300, Default = 60 }, Callback = function(value) SettingsState.AutoSell.TimeInterval = value end })
-TabSell:Button({ Title = "Sell Now", Desc = "Sell All Items Immediately", Icon = "trash-2", Callback = function()
-    task.spawn(function()
-        SettingsState.AutoSell.IsSelling = true; task.wait(0.2); pcall(function() SellAll:InvokeServer() end)
-        WindUI:Notify({Title = "Sell All", Content = "Sold!", Duration = 2}); task.wait(0.5); SettingsState.AutoSell.IsSelling = false
-    end)
-end })
+TabSell:Button({ Title = "Sell Now", Desc = "Sell All Items Immediately", Icon = "trash-2", Callback = function() task.spawn(function() SettingsState.AutoSell.IsSelling = true; task.wait(0.2); pcall(function() SellAll:InvokeServer() end); WindUI:Notify({Title = "Sell All", Content = "Sold!", Duration = 2}); task.wait(0.5); SettingsState.AutoSell.IsSelling = false end) end })
 
 -- [[ TAB 3: WEATHER ]]
 TabWeather:Dropdown({ Title = "Select Weather(s)", Desc = "Choose multiple weathers to maintain", Values = {"Wind", "Cloudy", "Snow", "Storm", "Radiant"}, Value = {}, Multi = true, AllowNone = true, Callback = function(option) SettingsState.AutoWeather.SelectedList = option end })
-TabWeather:Toggle({ Title = "Smart Monitor", Desc = "Checks every 15s", Icon = "cloud-lightning", Value = false, Callback = function(state)
-    SettingsState.AutoWeather.Active = state
-    if state then StartSmartWeatherLoop(); WindUI:Notify({Title = "Weather", Content = "Monitor Started", Duration = 2})
-    else WindUI:Notify({Title = "Weather", Content = "Monitor Stopped", Duration = 2}) end
-end })
+TabWeather:Toggle({ Title = "Smart Monitor", Desc = "Checks every 15s", Icon = "cloud-lightning", Value = false, Callback = function(state) SettingsState.AutoWeather.Active = state; if state then StartSmartWeatherLoop(); WindUI:Notify({Title = "Weather", Content = "Monitor Started", Duration = 2}) else WindUI:Notify({Title = "Weather", Content = "Monitor Stopped", Duration = 2}) end end })
 
 -- [[ TAB 4: TELEPORT ]]
 TabTeleport:Section({ Title = "Event" })
-TabTeleport:Button({ Title = "Teleport to Megalodon", Desc = "Please on Walk on Water Inside Player Menus", Icon = "skull", Callback = function() TeleportToMegalodon() end })
+TabTeleport:Button({ Title = "Teleport to Megalodon", Desc = "Auto find in '!!! MENU RINGS'", Icon = "skull", Callback = function() TeleportToMegalodon() end })
 
 TabTeleport:Section({ Title = "Islands" }) 
 local TP_Dropdown = TabTeleport:Dropdown({ Title = "Select Island", Desc = "Fixed GPS Coordinates", Values = zoneNames, Value = zoneNames[1] or "Select", Callback = function(val) selectedZone = val end })
@@ -496,43 +484,19 @@ TabTeleport:Section({ Title = "Player Teleport" })
 local targetPlayerName = ""
 local playerNames = GetPlayerList()
 local PlayerDropdown = TabTeleport:Dropdown({ Title = "Select Player", Desc = "List of players in server", Values = playerNames, Value = playerNames[1] or "None", Callback = function(val) targetPlayerName = val end })
-TabTeleport:Button({ Title = "Teleport to Player", Desc = "Go to target player", Icon = "user", Callback = function()
-    local target = FindPlayer(targetPlayerName)
-    if target and target.Character and target.Character:FindFirstChild("HumanoidRootPart") then
-        TeleportTo(target.Character.HumanoidRootPart.Position + Vector3.new(3, 0, 0))
-        WindUI:Notify({Title = "Teleport", Content = "Warped to " .. target.Name, Duration = 2})
-    else WindUI:Notify({Title = "Error", Content = "Player not found!", Duration = 2}) end
-end })
+TabTeleport:Button({ Title = "Teleport to Player", Desc = "Go to target player", Icon = "user", Callback = function() local target = FindPlayer(targetPlayerName); if target and target.Character and target.Character:FindFirstChild("HumanoidRootPart") then TeleportTo(target.Character.HumanoidRootPart.Position + Vector3.new(3, 0, 0)); WindUI:Notify({Title = "Teleport", Content = "Warped to " .. target.Name, Duration = 2}) else WindUI:Notify({Title = "Error", Content = "Player not found!", Duration = 2}) end end })
 TabTeleport:Button({ Title = "Refresh Players", Desc = "Update list", Icon = "refresh-cw", Callback = function() local newPlayers = GetPlayerList(); PlayerDropdown:Refresh(newPlayers, newPlayers[1] or "None"); WindUI:Notify({Title = "System", Content = "List updated!", Duration = 2}) end })
 
 TabTeleport:Section({ Title = "Coordinate Tools" })
 LivePosToggle = TabTeleport:Toggle({ Title = "Show Live Pos", Desc = "Click to show coordinates", Icon = "monitor", Value = false, Callback = function(state) TogglePosWatcher(state) end })
 CoordDisplay = TabTeleport:Paragraph({ Title = "Current Position", Desc = "Status: Off" })
-TabTeleport:Button({ Title = "Copy Position", Desc = "Copy 'Vector3.new(...)'", Icon = "copy", Callback = function()
-    local Char = Players.LocalPlayer.Character
-    if Char and Char:FindFirstChild("HumanoidRootPart") then
-        local pos = Char.HumanoidRootPart.Position
-        local str = string.format("Vector3.new(%.0f, %.0f, %.0f)", pos.X, pos.Y, pos.Z)
-        if setclipboard then setclipboard(str); WindUI:Notify({Title = "Copied!", Content = "Saved", Duration = 2}) else print("📍 COPIED: " .. str); WindUI:Notify({Title = "Error", Content = "Check F9", Duration = 2}) end
-    end
-end })
+TabTeleport:Button({ Title = "Copy Position", Desc = "Copy 'Vector3.new(...)'", Icon = "copy", Callback = function() local Char = Players.LocalPlayer.Character; if Char and Char:FindFirstChild("HumanoidRootPart") then local pos = Char.HumanoidRootPart.Position; local str = string.format("Vector3.new(%.0f, %.0f, %.0f)", pos.X, pos.Y, pos.Z); if setclipboard then setclipboard(str); WindUI:Notify({Title = "Copied!", Content = "Saved", Duration = 2}) else print("📍 COPIED: " .. str); WindUI:Notify({Title = "Error", Content = "Check F9", Duration = 2}) end end end })
 
 -- [[ TAB 5: SETTINGS ]]
 TabSettings:Button({ Title = "Anti-AFK", Desc = "Status: Active (Always On)", Icon = "clock", Callback = function() WindUI:Notify({ Title = "Anti-AFK", Content = "Permanently Active", Duration = 2 }) end })
-
-TabSettings:Button({ Title = "Destroy Fish Popup", Desc = "Permanently removes 'Small Notification' UI", Icon = "trash-2", Callback = function()
-    if SettingsState.PopupDestroyed then WindUI:Notify({Title = "UI", Content = "Already Destroyed!", Duration = 2}) return end
-    SettingsState.PopupDestroyed = true
-    ExecuteDestroyPopup()
-    WindUI:Notify({Title = "UI", Content = "Popup Destroyed!", Duration = 3})
-end })
+TabSettings:Button({ Title = "Destroy Fish Popup", Desc = "Permanently removes 'Small Notification' UI", Icon = "trash-2", Callback = function() if SettingsState.PopupDestroyed then WindUI:Notify({Title = "UI", Content = "Already Destroyed!", Duration = 2}) return end; SettingsState.PopupDestroyed = true; ExecuteDestroyPopup(); WindUI:Notify({Title = "UI", Content = "Popup Destroyed!", Duration = 3}) end })
 TabSettings:Toggle({ Title = "FPS Boost (Potato)", Desc = "Low Graphics", Icon = "monitor", Value = false, Callback = function(state) ToggleFPSBoost(state) end })
-TabSettings:Button({ Title = "Remove VFX (Permanent)", Desc = "Delete Effects", Icon = "trash-2", Callback = function()
-    if SettingsState.VFXRemoved then WindUI:Notify({Title = "VFX", Content = "Already Removed!", Duration = 2}) return end
-    SettingsState.VFXRemoved = true
-    ExecuteRemoveVFX()
-    WindUI:Notify({Title = "VFX", Content = "Deleted!", Duration = 2})
-end })
+TabSettings:Button({ Title = "Remove VFX (Permanent)", Desc = "Delete Effects", Icon = "trash-2", Callback = function() if SettingsState.VFXRemoved then WindUI:Notify({Title = "VFX", Content = "Already Removed!", Duration = 2}) return end; SettingsState.VFXRemoved = true; ExecuteRemoveVFX(); WindUI:Notify({Title = "VFX", Content = "Deleted!", Duration = 2}) end })
 
 -- Init
 task.delay(1, function()
