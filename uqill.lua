@@ -1,6 +1,6 @@
 --[[ 
-    FILE: fishing.lua
-    VERSION: 2.7 (Turbo Loop + Player Toggles)
+    FILE: fishing_uqill_v3.lua
+    VERSION: 3.0 (Update: ESP Visuals + Server Hop)
 ]]
 
 -- =====================================================
@@ -24,6 +24,7 @@ for _, v in pairs(CoreGui:GetChildren()) do
     end
 end
 
+-- Cleanup UI sisa
 for _, v in pairs(CoreGui:GetDescendants()) do
     if v:IsA("TextLabel") and v.Text == "UQiLL" then
         local container = v
@@ -77,7 +78,8 @@ local SettingsState = {
         Targets = {} 
     },
     PosWatcher = { Active = false, Connection = nil },
-    WaterWalk = { Active = false, Part = nil, Connection = nil } 
+    WaterWalk = { Active = false, Part = nil, Connection = nil },
+    AnimsDisabled = { Active = false, Connections = {} }
 }
 
 local Workspace = game:GetService("Workspace")
@@ -151,18 +153,22 @@ end
 -- =====================================================
 local function StartAutoSellLoop()
     task.spawn(function()
-        print("💰 Auto Sell: STARTED")
+        print("💰 Auto Sell: BACKGROUND MODE STARTED")
         while SettingsState.AutoSell.TimeActive do
+            -- Tunggu interval (misal 60 detik)
+            -- Kita pakai loop kecil agar kalau dimatikan di tengah jalan, langsung berhenti
             for i = 1, SettingsState.AutoSell.TimeInterval do
                 if not SettingsState.AutoSell.TimeActive then return end
                 task.wait(1)
             end
-            SettingsState.AutoSell.IsSelling = true 
-            task.wait(0.5) 
-            pcall(function() SellAll:InvokeServer() end)
-            pcall(function() CancelInput:InvokeServer() end)
-            task.wait(0.5)
-            SettingsState.AutoSell.IsSelling = false
+
+            -- [[ FIX PENTING ]]
+            -- Kita bungkus SellAll dalam task.spawn LAGI.
+            -- Ini menjamin perintah 'Jual' berjalan di thread hantu.
+            -- Jadi fishing loop TIDAK AKAN PERNAH menunggu proses jual selesai.
+            task.spawn(function()
+                pcall(function() SellAll:InvokeServer() end)
+            end)
         end
     end)
 end
@@ -173,7 +179,7 @@ end
 local function startFishingLoop()
     print("🎣 Standard Loop Started")
     while getgenv().fishingStart do
-        while SettingsState.AutoSell.IsSelling do task.wait(0.1) end
+        -- while SettingsState.AutoSell.IsSelling do task.wait(0.1) end
         task.spawn(function() ChargeRod:InvokeServer() end)
         task.spawn(function() RequestGame:InvokeServer(unpack(args)) end)
         task.wait(delayTime)
@@ -185,17 +191,20 @@ end
 
 local function startFishingSuperInstantLoop()
     print("⚡ TURBO Loop Started")
+    local _Charge = ChargeRod
+    local _Request = RequestGame
+    local _Complete = CompleteGame
+    local _Cancel = CancelInput
     while getgenv().fishingStart do
-        while SettingsState.AutoSell.IsSelling do task.wait(0.1) end
-        pcall(function() CancelInput:InvokeServer() end)
+        pcall(function() _Cancel:InvokeServer() end)
         task.wait(0.05)
-        task.spawn(function() pcall(function() ChargeRod:InvokeServer() end) end)
+        task.spawn(function() pcall(function() _Charge:InvokeServer() end) end)
         task.wait(0.03)
-        task.spawn(function() pcall(function() RequestGame:InvokeServer(unpack(args)) end) end)
+        task.spawn(function() pcall(function() _Request:InvokeServer(unpack(args)) end) end)
         task.wait(delayCharge) 
-        pcall(function() CompleteGame:FireServer() end)
+        pcall(function() _Complete:FireServer() end)
         task.wait(delayReset) 
-        pcall(function() CancelInput:InvokeServer() end)
+        pcall(function() _Cancel:InvokeServer() end)
         task.wait(0.05)
     end
     print("🛑 TURBO Loop Stopped")
@@ -256,7 +265,6 @@ local function StartAntiAFK()
     end)
 end
 
--- WATER WALK (FIXED)
 local function ToggleWaterWalk(state)
     if state then
         local p = Instance.new("Part")
@@ -287,6 +295,45 @@ local function ToggleWaterWalk(state)
     end
 end
 
+-- [[ NEW: NO ANIMATION (T-POSE) ]]
+local function ToggleAnims(state)
+    SettingsState.AnimsDisabled.Active = state
+    
+    local function StopAll()
+        local Char = Players.LocalPlayer.Character
+        if Char and Char:FindFirstChild("Humanoid") then
+            local Hum = Char.Humanoid
+            local Animator = Hum:FindFirstChild("Animator")
+            if Animator then
+                for _, track in pairs(Animator:GetPlayingAnimationTracks()) do
+                    track:Stop()
+                end
+            end
+        end
+    end
+
+    if state then
+        StopAll()
+        local function HookChar(char)
+            local hum = char:WaitForChild("Humanoid")
+            local animator = hum:WaitForChild("Animator")
+            local conn = animator.AnimationPlayed:Connect(function(track)
+                if SettingsState.AnimsDisabled.Active then track:Stop() end
+            end)
+            table.insert(SettingsState.AnimsDisabled.Connections, conn)
+        end
+
+        if Players.LocalPlayer.Character then HookChar(Players.LocalPlayer.Character) end
+        local conn2 = Players.LocalPlayer.CharacterAdded:Connect(HookChar)
+        table.insert(SettingsState.AnimsDisabled.Connections, conn2)
+    else
+        for _, conn in pairs(SettingsState.AnimsDisabled.Connections) do
+            conn:Disconnect()
+        end
+        SettingsState.AnimsDisabled.Connections = {}
+    end
+end
+
 -- =====================================================
 -- 🌌 BAGIAN 7: TELEPORT SYSTEM
 -- =====================================================
@@ -305,7 +352,6 @@ local Waypoints = {
     ["Ancient Jungle"]      = Vector3.new(1463, 8, -358),
     ["Ancient Ruin"]        = Vector3.new(6021, -586, 4633),
     ["Sacred Temple"]       = Vector3.new(1476, -22, -632),
-    ["Creater Island"]      = Vector3.new(1021, 16, 5065),
     ["Classic Island"]      = Vector3.new(1433, 44, 2755),
     ["Iron Cavern"]         = Vector3.new(-8798, -585, 241),
     ["Iron Cafe"]           = Vector3.new(-8647, -548, 160)
@@ -413,7 +459,7 @@ end
 local WindUI = loadstring(game:HttpGet("https://github.com/Footagesus/WindUI/releases/latest/download/main.lua"))()
 local Window = WindUI:CreateWindow({ Title = "UQiLL", Icon = "door-open", Author = "by UQi", Transparent = true })
 Window.Name = GUI_NAMES.Main 
-Window:Tag({ Title = "v.1.1.1", Icon = "github", Color = Color3.fromHex("#30ff6a"), Radius = 0 })
+Window:Tag({ Title = "v.3.0", Icon = "github", Color = Color3.fromHex("#30ff6a"), Radius = 0 })
 Window:SetToggleKey(Enum.KeyCode.H)
 
 local TabPlayer = Window:Tab({ Title = "Player Setting", Icon = "user" })
@@ -423,41 +469,14 @@ local TabWeather = Window:Tab({ Title = "Weather", Icon = "cloud-lightning" })
 local TabTeleport = Window:Tab({ Title = "Teleport", Icon = "map-pin" })
 local TabSettings = Window:Tab({ Title = "Settings", Icon = "settings" })
 
--- [[ TAB PLAYER: UTILITIES (UPDATED TOGGLES) ]]
-TabPlayer:Toggle({
-    Title = "Walk on Water", Desc = "Creates a platform below you", Icon = "waves", Value = false, 
-    Callback = function(state) ToggleWaterWalk(state); WindUI:Notify({Title = "Movement", Content = state and "Water Walk ON" or "Water Walk OFF", Duration = 2}) end
-})
+-- [[ TAB PLAYER: UTILITIES ]]
+TabPlayer:Section({ Title = "Players Feature" })
+TabPlayer:Toggle({ Title = "Walk on Water", Desc = "Creates a platform below you", Icon = "waves", Value = false, Callback = function(state) ToggleWaterWalk(state); WindUI:Notify({Title = "Movement", Content = state and "Water Walk ON" or "Water Walk OFF", Duration = 2}) end })
+TabPlayer:Toggle({ Title = "Disable Animation", Desc = "Stop character anims (T-Pose)", Icon = "user-x", Value = false, Callback = function(state) ToggleAnims(state); WindUI:Notify({Title = "Player", Content = state and "Animations Disabled" or "Animations Enabled", Duration = 2}) end })
 
-TabPlayer:Toggle({
-    Title = "Equip Diving Gear", Desc = "Toggle Oxygen Tank (105)", Icon = "anchor", Value = false,
-    Callback = function(state)
-        if state then
-            pcall(function() EquipTank:InvokeServer(105) end)
-            WindUI:Notify({Title = "Item", Content = "Diving Gear Equipped", Duration = 2})
-        else
-            -- Logic unequip manual: Cari tool di karakter, pindah ke backpack
-            local Char = Players.LocalPlayer.Character
-            local Backpack = Players.LocalPlayer.Backpack
-            if Char then
-                for _, t in pairs(Char:GetChildren()) do
-                    if t:IsA("Tool") and (string.find(t.Name, "Oxygen") or string.find(t.Name, "Tank") or string.find(t.Name, "Diving")) then
-                        t.Parent = Backpack
-                    end
-                end
-            end
-            WindUI:Notify({Title = "Item", Content = "Diving Gear Unequipped", Duration = 2})
-        end
-    end
-})
-
-TabPlayer:Toggle({
-    Title = "Equip Radar", Desc = "Toggle Fishing Radar", Icon = "radar", Value = false,
-    Callback = function(state)
-        pcall(function() UpdateRadar:InvokeServer(state) end)
-        WindUI:Notify({Title = "Item", Content = state and "Radar ON" or "Radar OFF", Duration = 2})
-    end
-})
+TabPlayer:Section({ Title = "Equipment" })
+TabPlayer:Toggle({ Title = "Equip Diving Gear", Desc = "Toggle Oxygen Tank (105)", Icon = "anchor", Value = false, Callback = function(state) if state then pcall(function() EquipTank:InvokeServer(105) end); WindUI:Notify({Title = "Item", Content = "Diving Gear Equipped", Duration = 2}) else local Char = Players.LocalPlayer.Character; local Backpack = Players.LocalPlayer.Backpack; if Char then for _, t in pairs(Char:GetChildren()) do if t:IsA("Tool") and (string.find(t.Name, "Oxygen") or string.find(t.Name, "Tank") or string.find(t.Name, "Diving")) then t.Parent = Backpack end end end; WindUI:Notify({Title = "Item", Content = "Diving Gear Unequipped", Duration = 2}) end end })
+TabPlayer:Toggle({ Title = "Equip Radar", Desc = "Toggle Fishing Radar", Icon = "radar", Value = false, Callback = function(state) pcall(function() UpdateRadar:InvokeServer(state) end); WindUI:Notify({Title = "Item", Content = state and "Radar ON" or "Radar OFF", Duration = 2}) end })
 
 -- [[ TAB 1: FISHING ]]
 TabFishing:Dropdown({ Title = "Category Fishing", Desc = "Select Mode", Values = {"Instant", "Blatan"}, Value = "Instant", Callback = function(option) instant, superInstant = (option == "Instant"), (option == "Blatan"); setElementVisible("Delay Fishing", false); setElementVisible("Delay Catch", false); setElementVisible("Reset Delay", false); if instant then setElementVisible("Delay Catch", true) elseif superInstant then setElementVisible("Delay Fishing", true); setElementVisible("Reset Delay", true) end end })
@@ -496,7 +515,64 @@ LivePosToggle = TabTeleport:Toggle({ Title = "Show Live Pos", Desc = "Click to s
 CoordDisplay = TabTeleport:Paragraph({ Title = "Current Position", Desc = "Status: Off" })
 TabTeleport:Button({ Title = "Copy Position", Desc = "Copy 'Vector3.new(...)'", Icon = "copy", Callback = function() local Char = Players.LocalPlayer.Character; if Char and Char:FindFirstChild("HumanoidRootPart") then local pos = Char.HumanoidRootPart.Position; local str = string.format("Vector3.new(%.0f, %.0f, %.0f)", pos.X, pos.Y, pos.Z); if setclipboard then setclipboard(str); WindUI:Notify({Title = "Copied!", Content = "Saved", Duration = 2}) else print("📍 COPIED: " .. str); WindUI:Notify({Title = "Error", Content = "Check F9", Duration = 2}) end end end })
 
+
 -- [[ TAB 5: SETTINGS ]]
+-- Update Feature 2: Server Hop
+TabSettings:Section({ Title = "Server" })
+TabSettings:Button({ 
+    Title = "Server Hop (Low Player)", 
+    Desc = "Find server with space", 
+    Icon = "server", 
+    Callback = function() 
+        WindUI:Notify({Title = "Server Hop", Content = "Searching...", Duration = 3})
+        local Http = game:GetService("HttpService")
+        local TPS = game:GetService("TeleportService")
+        local Api = "https://games.roblox.com/v1/games/"
+        local PlaceId = game.PlaceId
+        local _servers = Api..PlaceId.."/servers/Public?sortOrder=Asc&limit=100"
+        
+        local function ListServers(cursor)
+            local Raw = game:HttpGet(_servers .. ((cursor and "&cursor="..cursor) or ""))
+            return Http:JSONDecode(Raw)
+        end
+        
+        local Server, Next; repeat
+            local Servers = ListServers(Next)
+            Server = Servers.data[1]
+            Next = Servers.nextPageCursor
+        until Server
+        
+        TPS:TeleportToPlaceInstance(PlaceId, Server.id, LocalPlayer)
+    end 
+})
+
+TabSettings:Button({
+    Title = "Rejoin Game (Auto-Exec)",
+    Desc = "Rejoin & Run Script",
+    Icon = "rotate-cw",
+    Callback = function()
+        local ts = game:GetService("TeleportService")
+        local p = game:GetService("Players").LocalPlayer
+        
+        WindUI:Notify({Title = "System", Content = "Rejoining...", Duration = 3})
+        
+        -- Script kamu yang akan dijalankan otomatis setelah loading screen selesai
+        local myScript = 'loadstring(game:HttpGet("https://raw.githubusercontent.com/99bieber/uqill/refs/heads/main/uqill.lua"))()'
+        
+        -- Cek support executor (Synapse, Krnl, Fluxus, Delta, dll)
+        if (syn and syn.queue_on_teleport) then
+            syn.queue_on_teleport(myScript)
+        elseif queue_on_teleport then
+            queue_on_teleport(myScript)
+        end
+        
+        -- PENTING: Gunakan Teleport biasa (PlaceId), BUKAN JobId
+        -- Ini memperbaiki Error 773 karena Roblox akan mencarikan server baru yang available
+        ts:Teleport(game.PlaceId, p)
+    end
+})
+
+TabSettings:Section({ Title = "Optimization" })
 TabSettings:Button({ Title = "Anti-AFK", Desc = "Status: Active (Always On)", Icon = "clock", Callback = function() WindUI:Notify({ Title = "Anti-AFK", Content = "Permanently Active", Duration = 2 }) end })
 TabSettings:Button({ Title = "Destroy Fish Popup", Desc = "Permanently removes 'Small Notification' UI", Icon = "trash-2", Callback = function() if SettingsState.PopupDestroyed then WindUI:Notify({Title = "UI", Content = "Already Destroyed!", Duration = 2}) return end; SettingsState.PopupDestroyed = true; ExecuteDestroyPopup(); WindUI:Notify({Title = "UI", Content = "Popup Destroyed!", Duration = 3}) end })
 TabSettings:Toggle({ Title = "FPS Boost (Potato)", Desc = "Low Graphics", Icon = "monitor", Value = false, Callback = function(state) ToggleFPSBoost(state) end })
@@ -510,4 +586,4 @@ task.delay(1, function()
 end)
 
 task.spawn(StartAntiAFK)
-print("✅ Script Loaded!")
+print("✅ Script v3.0 Loaded!")
