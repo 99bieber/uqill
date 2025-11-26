@@ -232,7 +232,8 @@ local Waypoints = {
     ["Sacred Temple"]       = Vector3.new(1476, -22, -632),
     ["Classic Island"]      = Vector3.new(1433, 44, 2755),
     ["Iron Cavern"]         = Vector3.new(-8798, -585, 241),
-    ["Iron Cafe"]           = Vector3.new(-8647, -548, 160)
+    ["Iron Cafe"]           = Vector3.new(-8647, -548, 160),
+    ["Crater Island"]           = Vector3.new(1070, 2, 5102)
 }
 
 local function TeleportTo(targetPos)
