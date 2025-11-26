@@ -106,112 +106,139 @@ local LocalPlayer = Players.LocalPlayer
 local PlayerGui = LocalPlayer:WaitForChild("PlayerGui")
 local RunService = game:GetService("RunService")
 
--- ============================================
--- AUTO DISCO ULTRA LIGHT v7 (Delta Rotation)
--- ============================================
+---------------------------------------------------------------------
+-- AUTO DISCO v13 — FINAL PRODUCTION VERSION
+-- Clean, Efisien, Stabil, dan Terintegrasi dengan Event Asli (Replion)
+---------------------------------------------------------------------
 
 local Players = game:GetService("Players")
+local RS = game:GetService("ReplicatedStorage")
+local Replion = require(RS.Packages.Replion)
+
 local LP = Players.LocalPlayer
-local HRP = function()
-	return LP.Character and LP.Character:FindFirstChild("HumanoidRootPart")
+
+---------------------------------------------------------------------
+-- KONFIGURASI TELEPORT
+---------------------------------------------------------------------
+local DISCO_POSITION     = Vector3.new(-8628, -548, 161)
+local HEIGHT_OFFSET      = Vector3.new(0, 2, 0)
+
+---------------------------------------------------------------------
+-- INTERNAL STATE
+---------------------------------------------------------------------
+local eventActive        = false
+local savedPosition      = nil
+local listener           = nil
+
+---------------------------------------------------------------------
+-- UTILITY: Ambil HRP
+---------------------------------------------------------------------
+local function HRP()
+    local char = LP.Character
+    if not char then return nil end
+    return char:FindFirstChild("HumanoidRootPart")
 end
 
-local function FindRealDiscoBall()
-	local root = workspace:FindFirstChild("ClassicEvent")
-	if not root then return nil end
-	local ev = root:FindFirstChild("DiscoEvent")
-	if not ev then return nil end
-
-	for _, v in ipairs(ev:GetDescendants()) do
-		if v:IsA("MeshPart") and v.Name == "DiscoBall" then
-			return v
-		end
-	end
-	return nil
+---------------------------------------------------------------------
+-- UTILITY: Safe Teleport v5
+-- 5 attempt, hard-velocity kill, CFrame override
+---------------------------------------------------------------------
+local function SafeTeleport(destination)
+    for _ = 1, 5 do
+        local hrp = HRP()
+        if hrp then
+            hrp.AssemblyLinearVelocity = Vector3.zero
+            hrp.CFrame = CFrame.new(destination)
+        end
+        task.wait(0.08)
+    end
 end
 
-local rotateConn
-local lastRotation = nil
-local stillCount = 0
-local originalCF = nil
+---------------------------------------------------------------------
+-- EVENT HANDLER: MULAI EVENT
+-- Save posisi dan teleport masuk
+---------------------------------------------------------------------
+local function HandleEventStart()
+    if eventActive then return end
+    eventActive = true
 
-local function TeleportToDisco()
-	local hrp = HRP()
-	if not hrp then return end
+    local hrp = HRP()
+    if hrp then
+        savedPosition = hrp.Position
+    end
 
-	if not originalCF then
-		originalCF = hrp.CFrame
-	end
+    print("[AutoDisco v13] Teleporting IN →", DISCO_POSITION)
 
-	hrp.CFrame = CFrame.new(-8627, -548, 164)
-	warn("[AutoDisco] TP → Event")
+    SafeTeleport(DISCO_POSITION + HEIGHT_OFFSET)
 end
 
-local function ReturnOriginal()
-	local hrp = HRP()
-	if not hrp then return end
+---------------------------------------------------------------------
+-- EVENT HANDLER: AKHIR EVENT
+-- Teleport balik ke posisi asal
+---------------------------------------------------------------------
+local function HandleEventEnd()
+    if not eventActive then return end
+    eventActive = false
 
-	if originalCF then
-		hrp.CFrame = originalCF
-		warn("[AutoDisco] Event selesai → balik")
-	end
+    if savedPosition then
+        print("[AutoDisco v13] Teleporting OUT →", savedPosition)
+        SafeTeleport(savedPosition + HEIGHT_OFFSET)
+    end
 
-	originalCF = nil
+    savedPosition = nil
 end
 
+---------------------------------------------------------------------
+-- PUBLIC API: Aktifkan AutoDisco
+---------------------------------------------------------------------
 function StartAutoDisco()
-	warn("[AutoDisco] ENABLED")
+    print("[AutoDisco v13] ENABLED")
 
-	local ball = FindRealDiscoBall()
-	if not ball then
-		warn("[AutoDisco] MeshPart DiscoBall NOT FOUND")
-		return
-	end
+    local CGE = Replion.Client:WaitReplion("ClassicGroupEvent")
 
-	if rotateConn then rotateConn:Disconnect() end
-	warn("[AutoDisco] Monitoring rotation:", ball:GetFullName())
+    -- Pastikan listener tidak ganda
+    if listener then
+        listener:Disconnect()
+        listener = nil
+    end
 
-	rotateConn = ball:GetPropertyChangedSignal("Rotation"):Connect(function()
-		if not SettingsState.AutoEventDisco.Active then return end
+    -- Daftarkan listener baru
+    listener = CGE:OnChange("Active", function(state)
+        if state == true then
+            HandleEventStart()
+        else
+            HandleEventEnd()
+        end
+    end)
 
-		local rot = ball.Rotation
-
-		if lastRotation then
-			local dx = math.abs(rot.X - lastRotation.X)
-			local dy = math.abs(rot.Y - lastRotation.Y)
-			local dz = math.abs(rot.Z - lastRotation.Z)
-			local delta = dx + dy + dz
-
-			-- Event aktif jika rotasi berubah signifikan
-			if delta > 0.1 then
-				stillCount = 0
-				if not originalCF then
-					TeleportToDisco()
-				end
-			else
-				-- Rotasi hampir diam → hitung “stabil”
-				stillCount = stillCount + 1
-				if stillCount >= 15 then -- ~ 0.2s
-					if originalCF then
-						ReturnOriginal()
-					end
-					stillCount = 0
-				end
-			end
-		end
-
-		lastRotation = rot
-	end)
+    -- Jika event sedang aktif ketika script hidup
+    if CGE:Get("Active") == true then
+        HandleEventStart()
+    end
 end
 
+---------------------------------------------------------------------
+-- PUBLIC API: Matikan AutoDisco
+---------------------------------------------------------------------
 function StopAutoDisco()
-	warn("[AutoDisco] DISABLED")
-	if rotateConn then rotateConn:Disconnect() end
-	rotateConn = nil
-	originalCF = nil
-	lastRotation = nil
-	stillCount = 0
+    print("[AutoDisco v13] DISABLED")
+
+    if listener then
+        listener:Disconnect()
+        listener = nil
+    end
+
+    eventActive   = false
+    savedPosition = nil
 end
+
+---------------------------------------------------------------------
+-- GLOBAL EXPORT (untuk SimMode atau script eksternal)
+---------------------------------------------------------------------
+_G.StartAutoDisco = StartAutoDisco
+_G.StopAutoDisco  = StopAutoDisco
+
+print("[AutoDisco v13] Loaded.")
 
 
 
@@ -939,7 +966,23 @@ TabWeather:Toggle({ Title = "Smart Monitor", Desc = "Checks every 15s", Icon = "
 
 -- [[ TAB 4: TELEPORT ]]
 TabTeleport:Section({ Title = "Auto Event" })
-TabTeleport:Toggle({ Title = "Auto Join Disco", Desc = "Warp to Iron Cafe when Active", Icon = "music", Value = false, Callback = function(state) SettingsState.AutoEventDisco.Active = state; if state then StartAutoDisco(); WindUI:Notify({Title = "Event", Content = "Scanning for Disco...", Duration = 2}) else StopAutoDisco(); WindUI:Notify({Title = "Event", Content = "Scanner Stopped", Duration = 2}) end end })
+TabTeleport:Toggle({
+    Title = "Auto Join Disco",
+    Desc = "Warp to Iron Cafe when Active",
+    Icon = "music",
+    Value = false,
+    Callback = function(state)
+        SettingsState.AutoEventDisco.Active = state
+        if state then 
+            StartAutoDisco()
+            WindUI:Notify({Title = "Event", Content = "Scanning for Disco...", Duration = 2})
+        else 
+            StopAutoDisco()
+            WindUI:Notify({Title = "Event", Content = "Scanner Stopped", Duration = 2})
+        end
+    end
+})
+
 TabTeleport:Button({ Title = "Teleport to Megalodon", Desc = "Auto find in '!!! MENU RINGS'", Icon = "skull", Callback = function() TeleportToMegalodon() end })
 
 TabTeleport:Section({ Title = "Islands" }) 
