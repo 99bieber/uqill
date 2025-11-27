@@ -537,20 +537,125 @@ local function startFishingSuperInstantLoop()
     print("🛑 TURBO Loop Stopped")
 end
 
--- =====================================================
--- ⚙️ BAGIAN 6: FITUR LAIN
--- =====================================================
-local function ToggleFPSBoost(state)
-    if state then
-        pcall(function()
-            settings().Rendering.QualityLevel = 1
-            game:GetService("Lighting").GlobalShadows = false
-        end)
-        for _, v in pairs(game:GetDescendants()) do
-            if v:IsA("BasePart") then v.Material = Enum.Material.Plastic; v.CastShadow = false end
+-- ==========================================================
+-- GUARANTEED BURIK MODE (Gray Dark Version)
+-- ==========================================================
+local function ToggleBurikGuaranteed(state)
+    if not state then
+        print("[BURIK MODE] OFF — restart for reset.")
+        return
+    end
+
+    -- Warna abu abu gelap nyaman
+    local DARK = Color3.new(0.31, 0.31, 0.31)
+
+    local function Flatten(o)
+        -- Remove lights
+        if o:IsA("PointLight") or o:IsA("SpotLight") or o:IsA("SurfaceLight") then
+            o.Enabled = false
+        end
+
+        -- Remove all effects
+        if o:IsA("ParticleEmitter") or o:IsA("Beam") or o:IsA("Trail") then
+            o.Enabled = false
+        end
+
+        -- Highlights & adornments
+        if o:IsA("Highlight")
+        or o:IsA("SelectionBox")
+        or o:IsA("BoxHandleAdornment")
+        or o:IsA("SphereHandleAdornment") then
+            o.Enabled = false
+        end
+
+        -- All billboard effects
+        if o:IsA("BillboardGui") then
+            o.Enabled = false
+        end
+
+        -- Remove decals / textures
+        if o:IsA("Decal") or o:IsA("Texture") then
+            o.Transparency = 1
+        end
+
+        -- Remove PBR
+        if o:IsA("SurfaceAppearance") then
+            o:Destroy()
+        end
+
+        -- MeshPart → cube forced
+        if o:IsA("MeshPart") then
+            o.MeshId = ""
+            o.TextureID = ""
+            o.Material = Enum.Material.Plastic
+            o.Color = DARK
+            o.Reflectance = 0
+            o.CastShadow = false
+        end
+
+        -- BasePart → dark plastic
+        if o:IsA("BasePart") then
+            o.Material = Enum.Material.Plastic
+            o.Color = DARK
+            o.Reflectance = 0
+            o.CastShadow = false
+        end
+
+        -- Remove accessories
+        if o:IsA("Accessory") 
+        or o:IsA("Shirt") 
+        or o:IsA("Pants") 
+        or o:IsA("ShirtGraphic") then
+            o:Destroy()
+        end
+
+        -- Remove mesh inside humanoids
+        if o:IsA("SpecialMesh") or o:IsA("Mesh") then
+            o.MeshId = ""
         end
     end
+
+    -- First-time flatten
+    for _, obj in ipairs(game:GetDescendants()) do
+        pcall(Flatten, obj)
+    end
+
+    -- Streamed assets / teleport objects hook
+    local function Hook(container)
+        container.DescendantAdded:Connect(function(o)
+            task.defer(function()
+                pcall(Flatten, o)
+                for _, d in ipairs(o:GetDescendants()) do
+                    pcall(Flatten, d)
+                end
+            end)
+        end)
+    end
+
+    Hook(workspace)
+    Hook(game.ReplicatedStorage)
+    Hook(game.StarterPlayer)
+    Hook(game.StarterGui)
+    Hook(game.Players)
+    Hook(game.ServerStorage)
+
+    -- Lighting flatten (gray dark)
+    local Lighting = game:GetService("Lighting")
+    for _, v in ipairs(Lighting:GetChildren()) do
+        if v:IsA("Sky") or v:IsA("PostEffect") then
+            v:Destroy()
+        end
+    end
+    Lighting.GlobalShadows = false
+    Lighting.Brightness = 1
+    Lighting.Ambient = DARK
+    Lighting.OutdoorAmbient = DARK
+    Lighting.EnvironmentSpecularScale = 0
+    Lighting.EnvironmentDiffuseScale = 0
+
+    print("[BURIK MODE] ACTIVE — Gray Dark Version.")
 end
+
 
 local function ExecuteRemoveVFX()
     local function KillVFX(obj)
@@ -1460,7 +1565,22 @@ TabSettings:Button({
 TabSettings:Section({ Title = "Optimization" })
 TabSettings:Button({ Title = "Anti-AFK", Desc = "Status: Active (Always On)", Icon = "clock", Callback = function() WindUI:Notify({ Title = "Anti-AFK", Content = "Permanently Active", Duration = 2 }) end })
 TabSettings:Button({ Title = "Destroy Fish Popup", Desc = "Permanently removes 'Small Notification' UI", Icon = "trash-2", Callback = function() if SettingsState.PopupDestroyed then WindUI:Notify({Title = "UI", Content = "Already Destroyed!", Duration = 2}) return end; SettingsState.PopupDestroyed = true; ExecuteDestroyPopup(); WindUI:Notify({Title = "UI", Content = "Popup Destroyed!", Duration = 3}) end })
-TabSettings:Toggle({ Title = "FPS Boost (Potato)", Desc = "Low Graphics", Icon = "monitor", Value = false, Callback = function(state) ToggleFPSBoost(state) end })
+TabSettings:Toggle({
+    Title = "Guaranteed Burik Mode",
+    Desc = "Mode burik paling stabil",
+    Icon = "eye-off",
+    Value = false,
+    Callback = function(v)
+        ToggleBurikGuaranteed(v)
+        WindUI:Notify({
+            Title = "Burik++",
+            Content = v and "Mode aktif" or "Mode mati",
+            Duration = 2
+        })
+    end
+})
+
+
 TabSettings:Button({ Title = "Remove VFX (Permanent)", Desc = "Delete Effects", Icon = "trash-2", Callback = function() if SettingsState.VFXRemoved then WindUI:Notify({Title = "VFX", Content = "Already Removed!", Duration = 2}) return end; SettingsState.VFXRemoved = true; ExecuteRemoveVFX(); WindUI:Notify({Title = "VFX", Content = "Deleted!", Duration = 2}) end })
 local RarityList = {"Common","Uncommon","Rare","Epic","Legendary","Mythic","Secret","Exotic","Azure"}
 
