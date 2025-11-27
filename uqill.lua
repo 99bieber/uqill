@@ -898,430 +898,325 @@ for name, _ in pairs(Waypoints) do table.insert(zoneNames, name) end
 table.sort(zoneNames)
 
 ---------------------------------------------------------------------
--- 📷 FREECAM v14 ULTIMATE — PURE LUA VERSION (NO += / -=)
+-- 📷 FREECAM v16 — DUAL ANALOG STABLE EDITION
+-- Natural movement, no sticking, no ghost movement, no UI conflict.
 ---------------------------------------------------------------------
 
 local Players = game:GetService("Players")
 local UIS = game:GetService("UserInputService")
 local RunService = game:GetService("RunService")
-local ContextActionService = game:GetService("ContextActionService")
 
 local LP = Players.LocalPlayer
 local Cam = workspace.CurrentCamera
 
 ---------------------------------------------------------------------
--- INTERNAL STATE
+-- CONFIG
 ---------------------------------------------------------------------
-local FreecamEnabled = false
+local MoveSpeed       = 3
+local RotSensitivity  = 0.22
+local CinematicMode   = false
+local CinematicSmooth = 0.12
+local FreecamFOV      = 70
 
-local MoveSpeed = 3
-local RotSensitivity = 0.22
-local CinematicMode = false
-local CinematicStrength = 0.15
-local FreecamFOV = 70
-
+---------------------------------------------------------------------
+-- STATE
+---------------------------------------------------------------------
+local Enabled = false
 local rotX, rotY = 0, 0
 local joyL = Vector2.new(0,0)
 local joyR = Vector2.new(0,0)
 
-local move = {
-    W=false, S=false, A=false, D=false,
-    Q=false, E=false
-}
-
+local draggingL = false
+local draggingR = false
+local lastLookTouch = nil
 local humanoid
-local savedWS=16
-local savedJP=50
-local savedAR=true
+local savedWS, savedJP, savedAR = 16,50,true
 
--- touch state
-local draggingLeft = false
-local draggingRight = false
-local lastTouchPosLeft = nil
-local lastTouchPosRight = nil
+-- Deadzone prevent ghost movement
+local DEADZONE = 0.18     -- kiri
+local DEADZONE_R = 0.10   -- kanan
 
 ---------------------------------------------------------------------
--- DISABLE ROBLOX DEFAULT MOBILE CONTROLS
+-- DISABLE BUILT-IN MOBILE CONTROLS
 ---------------------------------------------------------------------
-local function DisableRobloxMobileControls()
-    local PlayerGui = LP:WaitForChild("PlayerGui",1)
-    if PlayerGui then
-        for _,v in ipairs(PlayerGui:GetChildren()) do
-            local name = string.lower(v.Name)
-            if string.find(name,"touch") or string.find(name,"thumb") then
-                v.Enabled = false
-            end
-        end
-    end
+local function DisableRobloxControls()
+	local pg = LP:FindFirstChild("PlayerGui")
+	if pg then
+		for _,v in ipairs(pg:GetChildren()) do
+			local n = v.Name:lower()
+			if n:find("touch") or n:find("thumb") then
+				v.Enabled = false
+			end
+		end
+	end
 
-    local PM = LP:WaitForChild("PlayerScripts",1):FindFirstChild("PlayerModule")
-    if PM then
-        local controls = require(PM):GetControls()
-        if controls then controls:Disable() end
-    end
+	local PM = LP:WaitForChild("PlayerScripts"):FindFirstChild("PlayerModule")
+	if PM then
+		local c = require(PM):GetControls()
+		if c then c:Disable() end
+	end
 end
 
-local function EnableRobloxMobileControls()
-    local PlayerGui = LP:WaitForChild("PlayerGui",1)
-    if PlayerGui then
-        for _,v in ipairs(PlayerGui:GetChildren()) do
-            local name = string.lower(v.Name)
-            if string.find(name,"touch") or string.find(name,"thumb") then
-                v.Enabled = true
-            end
-        end
-    end
+local function EnableRobloxControls()
+	local pg = LP:FindFirstChild("PlayerGui")
+	if pg then
+		for _,v in ipairs(pg:GetChildren()) do
+			local n = v.Name:lower()
+			if n:find("touch") or n:find("thumb") then
+				v.Enabled = true
+			end
+		end
+	end
 
-    local PM = LP:WaitForChild("PlayerScripts",1):FindFirstChild("PlayerModule")
-    if PM then
-        local controls = require(PM):GetControls()
-        if controls then controls:Enable() end
-    end
+	local PM = LP:WaitForChild("PlayerScripts"):FindFirstChild("PlayerModule")
+	if PM then
+		local c = require(PM):GetControls()
+		if c then c:Enable() end
+	end
 end
 
 ---------------------------------------------------------------------
--- CREATE VIRTUAL JOYSTICKS (LEFT & RIGHT)
+-- ANALOG GUI CREATOR
 ---------------------------------------------------------------------
-local function CreateStickUI(px, py)
-    local outer = Instance.new("Frame")
-    outer.Size = UDim2.fromOffset(150,150)
-    outer.Position = UDim2.new(0,px,1,py)
-    outer.AnchorPoint = Vector2.new(0,1)
-    outer.BackgroundColor3 = Color3.fromRGB(50,50,50)
-    outer.BackgroundTransparency = 0.6
-    outer.BorderSizePixel = 0
+local function CreateAnalog(px, py)
+	local g = Instance.new("Frame")
+	g.Size = UDim2.fromOffset(150,150)
+	g.Position = UDim2.new(0, px, 1, py)
+	g.AnchorPoint = Vector2.new(0,1)
+	g.BackgroundColor3 = Color3.fromRGB(40,40,40)
+	g.BackgroundTransparency = 0.55
+	g.BorderSizePixel = 0
 
-    local corner1 = Instance.new("UICorner", outer)
-    corner1.CornerRadius = UDim.new(1,0)
+	local corner = Instance.new("UICorner", g)
+	corner.CornerRadius = UDim.new(1,0)
 
-    local inner = Instance.new("Frame")
-    inner.Size = UDim2.fromOffset(60,60)
-    inner.Position = UDim2.fromOffset(45,45)
-    inner.BackgroundColor3 = Color3.fromRGB(255,255,255)
-    inner.BackgroundTransparency = 0.2
-    inner.BorderSizePixel = 0
-    inner.Parent = outer
+	local h = Instance.new("Frame")
+	h.Size = UDim2.fromOffset(60,60)
+	h.Position = UDim2.fromOffset(45,45)
+	h.BackgroundColor3 = Color3.fromRGB(255,255,255)
+	h.BackgroundTransparency = 0.25
+	h.BorderSizePixel = 0
+	h.Parent = g
 
-    local corner2 = Instance.new("UICorner", inner)
-    corner2.CornerRadius = UDim.new(1,0)
+	local corner2 = Instance.new("UICorner", h)
+	corner2.CornerRadius = UDim.new(1,0)
 
-    return outer, inner
+	return g, h
 end
 
-local function CreateJoystickUI()
-    local gui = Instance.new("ScreenGui")
-    gui.Name = "UQ_Freecam_Sticks"
-    gui.ResetOnSpawn = false
-    gui.Parent = LP:WaitForChild("PlayerGui")
+local stickGui = Instance.new("ScreenGui")
+stickGui.Name = "Freecam_AnalogV16"
+stickGui.ResetOnSpawn = false
+stickGui.Parent = LP:WaitForChild("PlayerGui")
 
-    local outerL, innerL = CreateStickUI(40, -220)
-    local outerR, innerR = CreateStickUI(Cam.ViewportSize.X - 200, -220)
+local outerL, innerL = CreateAnalog(40, -230)  
+local outerR, innerR = CreateAnalog(Cam.ViewportSize.X - 200, -230)
 
-    outerL.Parent = gui
-    outerR.Parent = gui
+outerL.Parent = stickGui
+outerR.Parent = stickGui
 
-    return {
-        gui = gui,
-        L = {outer = outerL, inner = innerL},
-        R = {outer = outerR, inner = innerR}
-    }
-end
-
-local sticks = CreateJoystickUI()
-sticks.gui.Enabled = false
+stickGui.Enabled = false
 
 ---------------------------------------------------------------------
--- HELPER: PROCESS JOYSTICK MOVEMENT
+-- ANALOG PROCESS FUNCTION (SUPER STABLE)
 ---------------------------------------------------------------------
-local function ProcessJoystick(outer, inner, input, isRight)
-    local center = outer.AbsolutePosition + outer.AbsoluteSize/2
+local function ProcessAnalog(outer, inner, inputPos, maxDist)
+	local center = outer.AbsolutePosition + outer.AbsoluteSize/2
+	local rel = Vector2.new(inputPos.X - center.X, inputPos.Y - center.Y)
 
-    local rel = Vector2.new(
-        input.Position.X - center.X,
-        input.Position.Y - center.Y
-    )
+	local dist = rel.Magnitude
+	local clamped = rel
 
-    local maxDist = 50
-    local dist = rel.Magnitude
-    local clamped = rel
+	if dist > maxDist then
+		clamped = rel.Unit * maxDist
+	end
 
-    if dist > maxDist then
-        clamped = rel.Unit * maxDist
-    end
+	inner.Position = UDim2.fromOffset(
+		(outer.AbsoluteSize.X/2) + clamped.X,
+		(outer.AbsoluteSize.Y/2) + clamped.Y
+	)
 
-    inner.Position = UDim2.fromOffset(outer.AbsoluteSize.X/2 + clamped.X, outer.AbsoluteSize.Y/2 + clamped.Y)
-
-    local vec = clamped / maxDist
-
-    if isRight then
-        joyR = vec
-    else
-        joyL = vec
-    end
+	local vec = clamped / maxDist
+	return vec
 end
 
 ---------------------------------------------------------------------
--- LEFT STICK INPUT
+-- LEFT ANALOG INPUT (MOVEMENT)
 ---------------------------------------------------------------------
-sticks.L.outer.InputBegan:Connect(function(i)
-    if not FreecamEnabled then return end
-    if i.UserInputType == Enum.UserInputType.Touch or i.UserInputType == Enum.UserInputType.MouseButton1 then
-        draggingLeft = true
-    end
+outerL.InputBegan:Connect(function(i)
+	if not Enabled then return end
+	if i.UserInputType == Enum.UserInputType.Touch or i.UserInputType == Enum.UserInputType.MouseButton1 then
+		draggingL = true
+	end
 end)
 
-sticks.L.outer.InputChanged:Connect(function(i)
-    if FreecamEnabled and draggingLeft then
-        ProcessJoystick(sticks.L.outer, sticks.L.inner, i, false)
-    end
+outerL.InputChanged:Connect(function(i)
+	if not Enabled or not draggingL then return end
+
+	local vec = ProcessAnalog(outerL, innerL, i.Position, 52)
+
+	-- DEADZONE fix
+	if vec.Magnitude < DEADZONE then
+		joyL = Vector2.new(0,0)
+	else
+		joyL = vec
+	end
 end)
 
-sticks.L.outer.InputEnded:Connect(function()
-    draggingLeft = false
-    joyL = Vector2.new(0,0)
-    sticks.L.inner.Position = UDim2.fromOffset(45,45)
-end)
-
----------------------------------------------------------------------
--- RIGHT STICK INPUT (Camera Rotation)
----------------------------------------------------------------------
-sticks.R.outer.InputBegan:Connect(function(i)
-    if not FreecamEnabled then return end
-    if i.UserInputType == Enum.UserInputType.Touch or i.UserInputType == Enum.UserInputType.MouseButton1 then
-        draggingRight = true
-    end
-end)
-
-sticks.R.outer.InputChanged:Connect(function(i)
-    if FreecamEnabled and draggingRight then
-        ProcessJoystick(sticks.R.outer, sticks.R.inner, i, true)
-    end
-end)
-
-sticks.R.outer.InputEnded:Connect(function()
-    draggingRight = false
-    joyR = Vector2.new(0,0)
-    sticks.R.inner.Position = UDim2.fromOffset(45,45)
+outerL.InputEnded:Connect(function()
+	draggingL = false
+	joyL = Vector2.new(0,0)
+	innerL.Position = UDim2.fromOffset(45,45)
 end)
 
 ---------------------------------------------------------------------
--- KEYBOARD MOVEMENT (PC)
+-- RIGHT ANALOG INPUT (CAMERA)
 ---------------------------------------------------------------------
-UIS.InputBegan:Connect(function(i,g)
-    if g or not FreecamEnabled then return end
-    local k = i.KeyCode
-
-    if k==Enum.KeyCode.W then move.W=true end
-    if k==Enum.KeyCode.S then move.S=true end
-    if k==Enum.KeyCode.A then move.A=true end
-    if k==Enum.KeyCode.D then move.D=true end
-    if k==Enum.KeyCode.E then move.E=true end
-    if k==Enum.KeyCode.Q then move.Q=true end
+outerR.InputBegan:Connect(function(i)
+	if not Enabled then return end
+	if i.UserInputType == Enum.UserInputType.Touch or i.UserInputType == Enum.UserInputType.MouseButton1 then
+		draggingR = true
+	end
 end)
 
-UIS.InputEnded:Connect(function(i)
-    local k = i.KeyCode
+outerR.InputChanged:Connect(function(i)
+	if not Enabled or not draggingR then return end
 
-    if k==Enum.KeyCode.W then move.W=false end
-    if k==Enum.KeyCode.S then move.S=false end
-    if k==Enum.KeyCode.A then move.A=false end
-    if k==Enum.KeyCode.D then move.D=false end
-    if k==Enum.KeyCode.E then move.E=false end
-    if k==Enum.KeyCode.Q then move.Q=false end
+	local vec = ProcessAnalog(outerR, innerR, i.Position, 52)
+
+	if vec.Magnitude < DEADZONE_R then
+		joyR = Vector2.new(0,0)
+	else
+		joyR = vec
+	end
+end)
+
+outerR.InputEnded:Connect(function()
+	draggingR = false
+	joyR = Vector2.new(0,0)
+	innerR.Position = UDim2.fromOffset(45,45)
 end)
 
 ---------------------------------------------------------------------
--- MOUSE MOVE LOOK (PC)
+-- PC MOUSE LOOK
 ---------------------------------------------------------------------
 UIS.InputChanged:Connect(function(i,g)
-    if not FreecamEnabled then return end
+	if not Enabled then return end
 
-    if i.UserInputType == Enum.UserInputType.MouseMovement and not UIS.TouchEnabled then
-        rotX = rotX - (i.Delta.X * RotSensitivity)
-        rotY = math.clamp(rotY - (i.Delta.Y * RotSensitivity), -85, 85)
-    end
-end)
-
----------------------------------------------------------------------
--- TOUCH SWIPE LOOK (Mobile/Emulator)
----------------------------------------------------------------------
-UIS.TouchMoved:Connect(function(t)
-    if not FreecamEnabled then return end
-
-    if draggingRight then return end -- right stick overrides
-
-    if lastTouchPosRight == nil then
-        lastTouchPosRight = t.Position
-        return
-    end
-
-    local delta = t.Position - lastTouchPosRight
-    rotX = rotX - (delta.X * RotSensitivity)
-    rotY = math.clamp(rotY - (delta.Y * RotSensitivity), -85,85)
-
-    lastTouchPosRight = t.Position
-end)
-
-UIS.TouchEnded:Connect(function()
-    lastTouchPosRight = nil
+	if i.UserInputType == Enum.UserInputType.MouseMovement and not UIS.TouchEnabled then
+		rotX = rotX - (i.Delta.X * RotSensitivity)
+		rotY = math.clamp(rotY - (i.Delta.Y * RotSensitivity), -85, 85)
+	end
 end)
 
 ---------------------------------------------------------------------
 -- MAIN CAMERA LOOP
 ---------------------------------------------------------------------
 RunService.RenderStepped:Connect(function(dt)
-    if not FreecamEnabled then return end
+	if not Enabled then return end
 
-    local cf = Cam.CFrame
+	local cf = Cam.CFrame
+	local moveVec = Vector3.new(0,0,0)
 
-    -----------------------------------------------------------------
-    -- MOVEMENT
-    -----------------------------------------------------------------
-    local moveVec = Vector3.new(0,0,0)
+	-- Joystick left = movement
+	moveVec = moveVec + (cf.LookVector * -joyL.Y)
+	moveVec = moveVec + (cf.RightVector * joyL.X)
 
-    -- joystick left
-    -- FIX: invert Y for correct joystick forward/back
-    moveVec = moveVec + (cf.LookVector * -joyL.Y)
-    moveVec = moveVec + (cf.RightVector * joyL.X)
+	-- Keyboard
+	if UIS:IsKeyDown(Enum.KeyCode.W) then moveVec = moveVec + cf.LookVector end
+	if UIS:IsKeyDown(Enum.KeyCode.S) then moveVec = moveVec - cf.LookVector end
+	if UIS:IsKeyDown(Enum.KeyCode.A) then moveVec = moveVec - cf.RightVector end
+	if UIS:IsKeyDown(Enum.KeyCode.D) then moveVec = moveVec + cf.RightVector end
+	if UIS:IsKeyDown(Enum.KeyCode.E) then moveVec = moveVec + Vector3.new(0,1,0) end
+	if UIS:IsKeyDown(Enum.KeyCode.Q) then moveVec = moveVec - Vector3.new(0,1,0) end
 
+	moveVec = moveVec * (MoveSpeed * dt * 58)
 
-    -- keyboard
-    if move.W then moveVec = moveVec + cf.LookVector end
-    if move.S then moveVec = moveVec - cf.LookVector end
-    if move.A then moveVec = moveVec - cf.RightVector end
-    if move.D then moveVec = moveVec + cf.RightVector end
-    if move.E then moveVec = moveVec + Vector3.new(0,1,0) end
-    if move.Q then moveVec = moveVec - Vector3.new(0,1,0) end
+	-- Right analog = camera rotation
+	rotX = rotX - (joyR.X * RotSensitivity * 3.2)
+	rotY = rotY - (joyR.Y * RotSensitivity * 3.2)
+	rotY = math.clamp(rotY, -85, 85)
 
-    moveVec = moveVec * (MoveSpeed * dt * 60)
+	local rotCF =
+		CFrame.Angles(0, math.rad(rotX), 0) *
+		CFrame.Angles(math.rad(rotY), 0, 0)
 
-    -----------------------------------------------------------------
-    -- ROTATION (from right stick + mouse)
-    -----------------------------------------------------------------
-    rotX = rotX - (joyR.X * RotSensitivity * 4)
-    rotY = rotY - (joyR.Y * RotSensitivity * 4)
-    rotY = math.clamp(rotY, -85,85)
+	local target = CFrame.new(cf.Position + moveVec) * rotCF
 
-    local rotCF =
-        CFrame.Angles(0, math.rad(rotX), 0) *
-        CFrame.Angles(math.rad(rotY), 0, 0)
+	if CinematicMode then
+		Cam.CFrame = Cam.CFrame:Lerp(target, CinematicSmooth)
+	else
+		Cam.CFrame = target
+	end
 
-    -----------------------------------------------------------------
-    -- APPLY CAMERA
-    -----------------------------------------------------------------
-    local target = CFrame.new(cf.Position + moveVec) * rotCF
-
-    if CinematicMode then
-        Cam.CFrame = Cam.CFrame:Lerp(target, CinematicStrength)
-    else
-        Cam.CFrame = target
-    end
-
-    Cam.FieldOfView = FreecamFOV
+	Cam.FieldOfView = FreecamFOV
 end)
 
 ---------------------------------------------------------------------
--- API: Toggle Freecam
+-- PUBLIC API
 ---------------------------------------------------------------------
-function ToggleFreecam(state)
-    FreecamEnabled = state
+function ToggleFreecam(v)
+	Enabled = v
 
-    local char = LP.Character
-    humanoid = char and char:FindFirstChild("Humanoid")
+	local char = LP.Character
+	humanoid = char and char:FindFirstChild("Humanoid")
 
-    if state then
-        Cam.CameraType = Enum.CameraType.Scriptable
+	if v then
+		Cam.CameraType = Enum.CameraType.Scriptable
 
-        if humanoid then
-            savedWS = humanoid.WalkSpeed
-            savedJP = humanoid.JumpPower
-            savedAR = humanoid.AutoRotate
-            humanoid.WalkSpeed = 0
-            humanoid.JumpPower = 0
-            humanoid.AutoRotate = false
-        end
+		if humanoid then
+			savedWS = humanoid.WalkSpeed
+			savedJP = humanoid.JumpPower
+			savedAR = humanoid.AutoRotate
 
-        DisableRobloxMobileControls()
+			humanoid.WalkSpeed = 0
+			humanoid.JumpPower = 0
+			humanoid.AutoRotate = false
+		end
 
-        if not UIS.TouchEnabled then
-            UIS.MouseBehavior = Enum.MouseBehavior.LockCurrentPosition
-            UIS.MouseIconEnabled = false
-        end
+		DisableRobloxControls()
 
-        if char and char:FindFirstChild("HumanoidRootPart") then
-            local hrp = char.HumanoidRootPart
-            Cam.CFrame = hrp.CFrame
-            rotX = hrp.Orientation.Y
-        end
+		if not UIS.TouchEnabled then
+			UIS.MouseBehavior = Enum.MouseBehavior.LockCurrentPosition
+			UIS.MouseIconEnabled = false
+		end
 
-        sticks.gui.Enabled = true
+		if char and char:FindFirstChild("HumanoidRootPart") then
+			local hrp = char.HumanoidRootPart
+			Cam.CFrame = hrp.CFrame
+			rotX = hrp.Orientation.Y
+		end
 
-        print("[Freecam v14] ENABLED")
+		stickGui.Enabled = true
 
-    else
-        FreecamEnabled = false
+	else
+		Enabled = false
+		stickGui.Enabled = false
 
-        UIS.MouseBehavior = Enum.MouseBehavior.Default
-        UIS.MouseIconEnabled = true
-        Cam.CameraType = Enum.CameraType.Custom
+		UIS.MouseBehavior = Enum.MouseBehavior.Default
+		UIS.MouseIconEnabled = true
+		Cam.CameraType = Enum.CameraType.Custom
 
-        sticks.gui.Enabled = false
+		if humanoid then
+			humanoid.WalkSpeed = savedWS
+			humanoid.JumpPower = savedJP
+			humanoid.AutoRotate = savedAR
+		end
 
-        if humanoid then
-            humanoid.WalkSpeed = savedWS
-            humanoid.JumpPower = savedJP
-            humanoid.AutoRotate = savedAR
-        end
+		EnableRobloxControls()
 
-        EnableRobloxMobileControls()
-
-        move = {W=false,S=false,A=false,D=false,Q=false,E=false}
-        joyL = Vector2.new(0,0)
-        joyR = Vector2.new(0,0)
-
-        print("[Freecam v14] DISABLED")
-    end
+		joyL = Vector2.new(0,0)
+		joyR = Vector2.new(0,0)
+		rotX = 0
+		rotY = 0
+	end
 end
 
----------------------------------------------------------------------
--- API for UI
----------------------------------------------------------------------
-function SetSpeed(v)
-    MoveSpeed = v
-end
+function SetFOV(v) FreecamFOV = v end
+function SetSpeed(v) MoveSpeed = v end
+function SetSensitivity(v) RotSensitivity = v end
+function SetCinematic(v) CinematicMode = v end
 
-function SetSensitivity(v)
-    RotSensitivity = v
-end
-
-function SetCinematic(v)
-    CinematicMode = v
-end
-
-function SetFOV(v)
-    FreecamFOV = v
-end
-
-function TeleportPlayerToCamera()
-    if LP.Character and LP.Character:FindFirstChild("HumanoidRootPart") then
-        LP.Character.HumanoidRootPart.CFrame = Cam.CFrame
-    end
-end
-
-function ResetCameraAngle()
-    rotX = 0
-    rotY = 0
-end
-
-print("[Freecam v14 ULTIMATE] Pure Lua Engine Loaded")
-
-
-
--- ---------------------------------------------------------------------
--- -- INITIALIZE INFINITE VIEW
--- ---------------------------------------------------------------------
--- EnableInfiniteView()
--- print("[Freecam] Module Loaded")
 
 -- =====================================================
 -- 🎨 BAGIAN 8: WIND UI SETUP
